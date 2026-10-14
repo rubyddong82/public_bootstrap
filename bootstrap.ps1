@@ -135,6 +135,30 @@ function Resolve-StateDir {
     return (Join-Path $HOME ".public_bootstrap")
 }
 
+function Resolve-DownloadsDir {
+    $userProfile = [Environment]::GetFolderPath("UserProfile")
+    if (-not [string]::IsNullOrWhiteSpace($userProfile)) {
+        return (Join-Path $userProfile "Downloads")
+    }
+
+    return (Join-Path $HOME "Downloads")
+}
+
+function Save-BootstrapOneLiner {
+    try {
+        $downloadsDir = Resolve-DownloadsDir
+        if (-not (Test-Path $downloadsDir)) {
+            New-Item -ItemType Directory -Path $downloadsDir -Force | Out-Null
+        }
+
+        $oneLinerPath = Join-Path $downloadsDir "run-public-bootstrap.ps1"
+        Set-Content -Path $oneLinerPath -Value "irm $BootstrapUrl | iex" -Encoding ASCII
+        Write-Info "Saved rerun helper: $oneLinerPath"
+    } catch {
+        Write-Info "Could not save rerun helper in Downloads: $($_.Exception.Message)"
+    }
+}
+
 function Initialize-Checkpoints {
     $resolvedStateDir = Resolve-StateDir
     $script:StateFile = Join-Path $resolvedStateDir "checkpoints.txt"
@@ -813,6 +837,8 @@ function Clone-SetupRepo {
         -HeartbeatSeconds 15 | Out-Null
     Set-Checkpoint "phase:private-setup"
 }
+
+Save-BootstrapOneLiner
 
 Assert-Windows
 Write-Step "Starting public Windows bootstrap"

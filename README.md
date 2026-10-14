@@ -35,6 +35,12 @@ Minimal one-liner:
 irm https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1 | iex
 ```
 
+The script saves that rerun helper to:
+
+```text
+%USERPROFILE%\Downloads\run-public-bootstrap.ps1
+```
+
 Verbose one-liner:
 
 ```powershell
