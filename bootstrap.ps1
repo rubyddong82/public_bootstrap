@@ -2,10 +2,13 @@
 param(
     [string]$SetupRepo = "rubyddong82/laptop-setup",
     [string]$SetupDir = "$HOME\laptop-setup",
-    [string]$SetupInstallScript = "install.ps1"
+    [string]$SetupInstallScript = "install.ps1",
+    [string]$WslDistribution = "Ubuntu",
+    [switch]$SkipWsl
 )
 
 $ErrorActionPreference = "Stop"
+$script:RestartRecommended = $false
 
 function Write-Step {
     param([string]$Message)
@@ -33,6 +36,29 @@ function Assert-Windows {
     if (-not $IsWindows -and $PSVersionTable.PSEdition -eq "Core") {
         throw "This bootstrap script is intended for Windows."
     }
+}
+
+function Test-IsAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Assert-AdministratorForWsl {
+    if ($SkipWsl) {
+        return
+    }
+
+    $distros = @(Get-WslDistros)
+    if ($distros.Count -gt 0) {
+        return
+    }
+
+    if (Test-IsAdministrator) {
+        return
+    }
+
+    throw "WSL installation requires Administrator. Open PowerShell as Administrator and rerun the one-liner, or run this script with -SkipWsl."
 }
 
 function Assert-Winget {
@@ -70,6 +96,60 @@ function Install-WingetPackage {
 
     Write-Info "Installing $Name..."
     winget install --id $Id --exact --source winget --accept-package-agreements --accept-source-agreements
+}
+
+function Get-WslDistros {
+    if (-not (Test-Command "wsl.exe")) {
+        return @()
+    }
+
+    $distros = @(wsl.exe --list --quiet 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        return @()
+    }
+
+    return @(
+        $distros |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { $_.Trim().Trim([char]0xfeff) }
+    )
+}
+
+function Install-Wsl {
+    if ($SkipWsl) {
+        Write-Step "Skipping WSL"
+        Write-Info "WSL installation was disabled with -SkipWsl."
+        return
+    }
+
+    Write-Step "Checking WSL"
+
+    $distros = @(Get-WslDistros)
+    if ($distros.Count -gt 0) {
+        Write-Info "WSL is already installed: $($distros -join ', ')"
+        return
+    }
+
+    if (-not (Test-Command "wsl.exe")) {
+        throw "wsl.exe was not found. WSL install requires Windows 10 version 2004 or later, or Windows 11."
+    }
+
+    Write-Info "Installing WSL with $WslDistribution."
+    wsl.exe --install -d $WslDistribution --no-launch
+    $installExitCode = $LASTEXITCODE
+
+    if ($installExitCode -notin @(0, 3010)) {
+        Write-Info "Retrying WSL install with web download."
+        wsl.exe --install --web-download -d $WslDistribution --no-launch
+        $installExitCode = $LASTEXITCODE
+    }
+
+    if ($installExitCode -notin @(0, 3010)) {
+        throw "WSL installation failed."
+    }
+
+    $script:RestartRecommended = $true
+    Write-Info "WSL was installed. A Windows restart may be required before Linux setup can continue."
 }
 
 function Ensure-GhAuth {
@@ -131,11 +211,20 @@ try {
 
 Write-Step "Checking Windows package manager"
 Assert-Winget
+Assert-AdministratorForWsl
 
 Install-WingetPackage -Id "Git.Git" -Name "Git"
 Install-WingetPackage -Id "GitHub.cli" -Name "GitHub CLI"
 Install-WingetPackage -Id "Microsoft.PowerShell" -Name "PowerShell 7"
 Install-WingetPackage -Id "Microsoft.WindowsTerminal" -Name "Windows Terminal"
+
+Install-Wsl
+
+if ($script:RestartRecommended) {
+    Write-Step "Restart recommended"
+    Write-Info "Restart Windows, then rerun the same bootstrap one-liner to continue with $SetupRepo."
+    return
+}
 
 Refresh-Path
 Clone-SetupRepo

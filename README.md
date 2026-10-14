@@ -9,7 +9,7 @@ and a normal HTTPS download.
 ## Intended Flow
 
 1. Start from a clean Windows install.
-2. Open built-in PowerShell.
+2. Open built-in PowerShell as Administrator.
 3. Download this repo's `bootstrap.ps1` from `raw.githubusercontent.com`.
 4. Run the script.
 5. Let the script install baseline tools:
@@ -17,9 +17,12 @@ and a normal HTTPS download.
    - GitHub CLI
    - PowerShell 7
    - Windows Terminal
-6. Log in to GitHub with `gh auth login`.
-7. Clone the private machine setup repo.
-8. Run the private repo's installer.
+   - WSL with Ubuntu
+6. Restart Windows if WSL asks for it.
+7. Rerun the same one-liner after reboot.
+8. Log in to GitHub with `gh auth login`.
+9. Clone the private machine setup repo.
+10. Run the private repo's installer.
 
 ## Fresh Machine Command
 
@@ -28,6 +31,9 @@ Minimal one-liner:
 ```powershell
 irm https://raw.githubusercontent.com/rubyddong82/laptop-bootstrap/main/bootstrap.ps1 | iex
 ```
+
+Run this from PowerShell as Administrator. WSL may require a reboot; if the
+script asks for one, restart Windows and run the same one-liner again.
 
 Safer version if you want to inspect the script first:
 
@@ -40,6 +46,10 @@ powershell -ExecutionPolicy Bypass -File "$env:TEMP\bootstrap.ps1"
 By default, the script installs baseline tools and then clones
 `rubyddong82/laptop-setup`. You can override that target with `-SetupRepo` if
 needed.
+
+WSL installs Ubuntu by default. You can override the distro with
+`-WslDistribution` or skip WSL with `-SkipWsl` when using the safer downloaded
+script version.
 
 ## Repo Split
 
@@ -64,7 +74,7 @@ and scripts that place files on disk.
 - Windows Terminal settings
 - VS Code settings, keybindings, snippets, and extensions
 - Fonts
-- WSL installation and Linux-side setup
+- Linux-side setup after WSL is installed
 - Windows features and registry settings
 - Common applications through `winget`, `scoop`, or `choco`
 - Project folders under the user profile
