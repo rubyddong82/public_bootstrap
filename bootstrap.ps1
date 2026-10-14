@@ -449,53 +449,58 @@ function Invoke-WingetPackageInstall {
 function Install-GoogleChromeDirect {
     param([hashtable]$Package)
 
-    Write-Step "Installing Google Chrome directly"
-    Write-Info "winget could not install Chrome cleanly. Downloading Google's standalone MSI instead."
+    try {
+        Write-Step "Installing Google Chrome directly"
+        Write-Info "winget could not install Chrome cleanly. Downloading Google's standalone MSI instead."
 
-    $downloadDir = Join-Path ([System.IO.Path]::GetTempPath()) "public_bootstrap"
-    if (-not (Test-Path $downloadDir)) {
-        New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
-    }
+        $downloadDir = Join-Path ([System.IO.Path]::GetTempPath()) "public_bootstrap"
+        if (-not (Test-Path $downloadDir)) {
+            New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+        }
 
-    $installerPath = Join-Path $downloadDir "googlechromestandaloneenterprise64.msi"
-    $installerUrl = "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi"
+        $installerPath = Join-Path $downloadDir "googlechromestandaloneenterprise64.msi"
+        $installerUrl = "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi"
 
-    if (Test-Path $installerPath) {
-        Remove-Item $installerPath -Force
-    }
+        if (Test-Path $installerPath) {
+            Remove-Item $installerPath -Force
+        }
 
-    if (Test-Command "curl.exe") {
-        Invoke-ProcessWithHeartbeat `
-            -FilePath "curl.exe" `
-            -Arguments @("-L", "--fail", "--retry", "3", "--connect-timeout", "20", "--output", $installerPath, $installerUrl) `
-            -Description "Google Chrome direct download" `
-            -HeartbeatSeconds 10 | Out-Null
-    } else {
-        Write-Heartbeat "curl.exe was not found; using PowerShell download."
-        Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing
-    }
+        if (Test-Command "curl.exe") {
+            Invoke-ProcessWithHeartbeat `
+                -FilePath "curl.exe" `
+                -Arguments @("-L", "--fail", "--retry", "3", "--connect-timeout", "20", "--output", $installerPath, $installerUrl) `
+                -Description "Google Chrome direct download" `
+                -HeartbeatSeconds 10 | Out-Null
+        } else {
+            Write-Heartbeat "curl.exe was not found; using PowerShell download."
+            Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing
+        }
 
-    if (-not (Test-Path $installerPath)) {
-        Write-Info "Chrome direct installer was not downloaded."
+        if (-not (Test-Path $installerPath)) {
+            Write-Info "Chrome direct installer was not downloaded."
+            return $false
+        }
+
+        $installExitCode = Invoke-ProcessWithHeartbeat `
+            -FilePath "msiexec.exe" `
+            -Arguments @("/i", $installerPath, "/qn", "/norestart") `
+            -Description "Google Chrome direct MSI install" `
+            -SuccessExitCodes @(0, 3010) `
+            -HeartbeatSeconds 20 `
+            -AllowFailure
+
+        if (($installExitCode -in @(0, 3010)) -or (Test-PackageInstalled -Package $Package)) {
+            Set-Checkpoint "package:$($Package.Id)"
+            Write-Info "Google Chrome direct install finished successfully."
+            return $true
+        }
+
+        Write-Info "Google Chrome direct installer exited with $installExitCode."
+        return $false
+    } catch {
+        Write-Info "Google Chrome direct install failed: $($_.Exception.Message)"
         return $false
     }
-
-    $installExitCode = Invoke-ProcessWithHeartbeat `
-        -FilePath "msiexec.exe" `
-        -Arguments @("/i", $installerPath, "/qn", "/norestart") `
-        -Description "Google Chrome direct MSI install" `
-        -SuccessExitCodes @(0, 3010) `
-        -HeartbeatSeconds 20 `
-        -AllowFailure
-
-    if (($installExitCode -in @(0, 3010)) -or (Test-PackageInstalled -Package $Package)) {
-        Set-Checkpoint "package:$($Package.Id)"
-        Write-Info "Google Chrome direct install finished successfully."
-        return $true
-    }
-
-    Write-Info "Google Chrome direct installer exited with $installExitCode."
-    return $false
 }
 
 function Invoke-WingetFallbacks {
@@ -825,6 +830,13 @@ $baselinePackages = @(
         Name = "Visual Studio Code"
         CommandNames = @("code")
         TestPaths = @()
+    },
+    @{
+        Id = "Obsidian.Obsidian"
+        Name = "Obsidian"
+        CommandNames = @("obsidian", "obsidian.exe")
+        TestPaths = @("$env:LOCALAPPDATA\Obsidian\Obsidian.exe", "$env:LOCALAPPDATA\Programs\Obsidian\Obsidian.exe", "$env:ProgramFiles\Obsidian\Obsidian.exe")
+        Optional = $true
     },
     @{
         Id = "Google.Chrome"

@@ -97,6 +97,10 @@ is_chrome_installed() {
     has_command google-chrome || has_command google-chrome-stable
 }
 
+is_obsidian_installed() {
+    has_command obsidian || [ -x /usr/bin/obsidian ] || [ -x /opt/Obsidian/obsidian ]
+}
+
 install_vscode_apt() {
     if is_vscode_installed; then
         log_info "Visual Studio Code is already installed."
@@ -138,6 +142,54 @@ install_chrome_apt() {
     deb_path="$(mktemp --suffix=.deb)"
     curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o "$deb_path"
     as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_path"
+    rm -f "$deb_path"
+}
+
+get_latest_obsidian_deb_url() {
+    curl -fsSL https://api.github.com/repos/obsidianmd/obsidian-releases/releases/latest |
+        sed -n 's/.*"browser_download_url": "\(https:.*obsidian_[^"]*_amd64\.deb\)".*/\1/p' |
+        head -n 1
+}
+
+install_obsidian_apt() {
+    if is_obsidian_installed; then
+        log_info "Obsidian is already installed."
+        return
+    fi
+
+    local arch
+    arch="$(dpkg --print-architecture)"
+    if [ "$arch" != "amd64" ]; then
+        log_info "Obsidian automatic install is skipped on apt architecture $arch."
+        return
+    fi
+
+    log_info "Installing Obsidian from the official GitHub release .deb."
+    local deb_url=""
+    if ! deb_url="$(get_latest_obsidian_deb_url)"; then
+        log_info "Could not query the latest Obsidian release. Skipping Obsidian."
+        return
+    fi
+
+    if [ -z "$deb_url" ]; then
+        log_info "Could not find an Obsidian .deb download URL. Skipping Obsidian."
+        return
+    fi
+
+    local deb_path
+    deb_path="$(mktemp --suffix=.deb)"
+    if ! curl -fsSL "$deb_url" -o "$deb_path"; then
+        log_info "Could not download the Obsidian .deb. Skipping Obsidian."
+        rm -f "$deb_path"
+        return
+    fi
+
+    if ! as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_path"; then
+        log_info "Could not install the Obsidian .deb. Skipping Obsidian."
+        rm -f "$deb_path"
+        return
+    fi
+
     rm -f "$deb_path"
 }
 
@@ -191,6 +243,7 @@ install_desktop_apps() {
         ensure_sudo
         install_vscode_apt
         install_chrome_apt
+        install_obsidian_apt
     elif has_command dnf; then
         ensure_sudo
         if is_vscode_installed; then
@@ -201,6 +254,7 @@ install_desktop_apps() {
             as_root dnf install -y code
         fi
         install_chrome_rpm_package
+        log_info "Obsidian automatic install is currently Ubuntu/Debian-only."
     elif has_command yum; then
         ensure_sudo
         if is_vscode_installed; then
@@ -211,6 +265,7 @@ install_desktop_apps() {
             as_root yum install -y code
         fi
         install_chrome_rpm_package
+        log_info "Obsidian automatic install is currently Ubuntu/Debian-only."
     elif has_command zypper; then
         ensure_sudo
         if is_vscode_installed; then
@@ -220,8 +275,9 @@ install_desktop_apps() {
             as_root zypper --non-interactive install code
         fi
         install_chrome_rpm_package
+        log_info "Obsidian automatic install is currently Ubuntu/Debian-only."
     else
-        log_info "Automatic VS Code and Chrome install is not supported for this package manager yet."
+        log_info "Automatic VS Code, Chrome, and Obsidian install is not supported for this package manager yet."
     fi
 }
 

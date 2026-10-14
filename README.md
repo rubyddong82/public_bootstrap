@@ -19,6 +19,7 @@ ship with the operating system and a normal HTTPS download.
    - PowerShell 7
    - Windows Terminal
    - Visual Studio Code
+   - Obsidian
    - Google Chrome
    - WSL with Ubuntu
 6. Restart Windows if WSL asks for it.
@@ -104,6 +105,9 @@ manifest problem, the script retries and then falls back to Google's direct MSI
 installer. Chrome is treated as optional so it will not block WSL or the private
 bootstrap if every Chrome install path fails.
 
+Obsidian is attempted by default through `winget` on Windows. It is optional, so
+it will not block WSL or the private bootstrap if `winget` cannot install it.
+
 ## Linux Flow
 
 1. Start from a fresh Linux install.
@@ -115,6 +119,7 @@ bootstrap if every Chrome install path fails.
    - Git
    - GitHub CLI
    - Visual Studio Code
+   - Obsidian
    - Google Chrome
 6. Log in to GitHub with `gh auth login`.
 7. Clone `rubyddong82/private_bootstrap`.
@@ -143,6 +148,9 @@ variables:
 ```bash
 SETUP_REPO=rubyddong82/private_bootstrap SETUP_DIR="$HOME/private_bootstrap" bash /tmp/bootstrap.sh
 ```
+
+On Ubuntu/Debian, Obsidian is installed from the official GitHub release `.deb`.
+Other Linux package managers currently skip Obsidian and continue.
 
 ## Repo Split
 
