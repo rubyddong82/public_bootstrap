@@ -316,9 +316,24 @@ install_desktop_apps() {
     fi
 }
 
-install_baseline_tools() {
-    log_step "Installing baseline Linux tools"
+baseline_tools_installed() {
+    has_command curl && has_command git && has_command gh || return 1
 
+    # ca-certificates and gpg have no command to probe on apt systems, so ask dpkg.
+    if has_command dpkg; then
+        dpkg -s ca-certificates gpg >/dev/null 2>&1 || return 1
+    fi
+}
+
+install_baseline_tools() {
+    log_step "Checking baseline Linux tools"
+
+    if baseline_tools_installed; then
+        log_info "curl, Git, and GitHub CLI are already installed; skipping package installs."
+        return
+    fi
+
+    log_info "Some baseline tools are missing; installing."
     if has_command apt-get; then
         install_with_apt
     elif has_command dnf; then
