@@ -14,7 +14,6 @@ operating system and a normal HTTPS download.
 4. Run the script.
 5. Let the script install baseline tools:
    - Git
-   - GitHub CLI
    - PowerShell 7
    - Windows Terminal
    - Visual Studio Code
@@ -23,8 +22,7 @@ operating system and a normal HTTPS download.
    - WSL with Ubuntu
 6. Restart Windows if WSL asks for it.
 7. Rerun the same one-liner after reboot.
-8. Let the script set up GitHub SSH on Windows (see below).
-9. Let the script run the Linux bootstrap inside WSL for GitHub CLI and private setup.
+8. Let the script run the Linux bootstrap inside WSL for GitHub CLI, GitHub SSH and private setup.
 
 ## Windows Command
 
@@ -75,24 +73,6 @@ Rerunning the one-liner resumes from the previous successful work. Installed
 packages are still verified before they are skipped. Reset checkpoints with
 `-ResetCheckpoints`.
 
-### GitHub SSH (Windows)
-
-After the packages and WSL step, the script sets up SSH access to GitHub using
-`gh`:
-
-1. Generates `%USERPROFILE%\.ssh\id_ed25519` if it does not exist (prompts for
-   an optional passphrase).
-2. Logs in with `gh auth login` (browser/device flow) with the
-   `admin:public_key` scope, or refreshes the scope if already logged in.
-3. Uploads the public key with `gh ssh-key add`, titled with the PC name.
-4. Adds github.com to `known_hosts` and verifies with `ssh -T git@github.com`.
-
-It is safe to rerun: if `ssh -T git@github.com` already succeeds, the whole step
-is skipped. Login and key upload are also skipped individually when already
-done. Failures here are non-fatal. Skip the step with `-SkipGitHubSsh`.
-
-WSL has its own `~/.ssh`, so this key is not shared with the Linux side.
-
 Disable the interactive restart prompt with `-NoRebootPrompt`.
 Skip the automatic Linux/WSL bootstrap handoff with `-SkipWslBootstrap`.
 
@@ -140,8 +120,24 @@ it will not block WSL if `winget` cannot install it.
    - Obsidian
    - Google Chrome
 6. Log in to GitHub with `gh auth login`.
-7. Clone `rubyddong82/private_bootstrap`.
-8. Run the private repo's Linux installer.
+7. Set up GitHub SSH (see below).
+8. Clone `rubyddong82/private_bootstrap`.
+9. Run the private repo's Linux installer.
+
+### GitHub SSH (Linux / WSL)
+
+The key lives in the Linux `~/.ssh` (inside WSL when run from the Windows
+bootstrap), not in the Windows profile. The script:
+
+1. Generates `~/.ssh/id_ed25519` if it does not exist (optional passphrase).
+2. Logs in with `gh auth login` including the `admin:public_key` scope, or
+   refreshes the scope if already logged in.
+3. Uploads the public key with `gh ssh-key add`, titled with the hostname.
+4. Verifies with `ssh -T git@github.com`.
+
+Safe to rerun: if `ssh -T git@github.com` already succeeds the step is skipped,
+and login and key upload are skipped individually when already done. Failures
+here are non-fatal.
 
 ## Linux Command
 

@@ -344,11 +344,58 @@ ensure_gh_auth() {
     fi
 
     log_info "Starting GitHub login."
-    gh auth login
+    gh auth login -h github.com -p ssh -s admin:public_key --skip-ssh-key
+}
+
+ensure_github_ssh() {
+    log_step "Setting up GitHub SSH access"
+
+    local key="$HOME/.ssh/id_ed25519"
+    local ssh_out
+    mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
+
+    if [ ! -f "$key" ]; then
+        log_info "Generating ed25519 key. Enter a passphrase when prompted (empty for none)."
+        ssh-keygen -t ed25519 -C "$USER@$(hostname)" -f "$key" || { log_info "ssh-keygen failed; skipping SSH setup."; return 0; }
+    else
+        log_info "SSH key already exists: $key"
+    fi
+
+    ssh_out="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 || true)"
+    if printf '%s' "$ssh_out" | grep -q "successfully authenticated"; then
+        log_info "GitHub SSH already works; nothing to do."
+        return 0
+    fi
+
+    if ! gh auth status -h github.com >/dev/null 2>&1; then
+        gh auth login -h github.com -p ssh -s admin:public_key --skip-ssh-key || { log_info "gh auth login failed; skipping SSH setup."; return 0; }
+    elif ! gh auth status -h github.com 2>&1 | grep -q "admin:public_key"; then
+        log_info "Refreshing GitHub CLI scope for key upload."
+        gh auth refresh -h github.com -s admin:public_key || { log_info "gh auth refresh failed; skipping SSH setup."; return 0; }
+    fi
+
+    local local_key
+    local_key="$(awk '{print $2}' "$key.pub")"
+    if gh ssh-key list 2>/dev/null | grep -qF "$local_key"; then
+        log_info "This SSH key is already registered on GitHub."
+    else
+        gh ssh-key add "$key.pub" --title "$(hostname)" && log_info "SSH key added to GitHub as '$(hostname)'." \
+            || { log_info "gh ssh-key add failed; add it manually."; return 0; }
+    fi
+
+    ssh_out="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 || true)"
+    if printf '%s' "$ssh_out" | grep -q "successfully authenticated"; then
+        log_info "GitHub SSH test passed."
+    else
+        log_info "GitHub SSH test did not confirm authentication: $ssh_out"
+        log_info "If the key has a passphrase, load it with ssh-add and run: ssh -T git@github.com"
+    fi
 }
 
 clone_setup_repo() {
     ensure_gh_auth
+    ensure_github_ssh
 
     log_step "Preparing setup repo $SETUP_REPO"
 
