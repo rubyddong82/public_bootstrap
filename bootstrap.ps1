@@ -4,6 +4,7 @@ param(
     [string]$SetupDir = "$HOME\private_bootstrap",
     [string]$SetupInstallScript = "install.ps1",
     [string]$WslDistribution = "Ubuntu",
+    [string]$BootstrapUrl = "https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1",
     [switch]$SkipWsl
 )
 
@@ -44,21 +45,73 @@ function Test-IsAdministrator {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Assert-AdministratorForWsl {
+function ConvertTo-QuotedPowerShellString {
+    param([string]$Value)
+    return "'" + ($Value -replace "'", "''") + "'"
+}
+
+function New-BootstrapCommand {
+    $setupRepoArg = ConvertTo-QuotedPowerShellString $SetupRepo
+    $setupDirArg = ConvertTo-QuotedPowerShellString $SetupDir
+    $setupInstallScriptArg = ConvertTo-QuotedPowerShellString $SetupInstallScript
+    $wslDistributionArg = ConvertTo-QuotedPowerShellString $WslDistribution
+
+    $commonArgs = "-SetupRepo $setupRepoArg -SetupDir $setupDirArg -SetupInstallScript $setupInstallScriptArg -WslDistribution $wslDistributionArg"
+
+    if (-not [string]::IsNullOrWhiteSpace($PSCommandPath) -and (Test-Path $PSCommandPath)) {
+        $scriptPathArg = ConvertTo-QuotedPowerShellString $PSCommandPath
+        return @"
+`$ErrorActionPreference = 'Stop'
+& $scriptPathArg $commonArgs
+"@
+    }
+
+    $bootstrapUrlArg = ConvertTo-QuotedPowerShellString $BootstrapUrl
+    return @"
+`$ErrorActionPreference = 'Stop'
+`$ProgressPreference = 'SilentlyContinue'
+`$bootstrap = irm $bootstrapUrlArg
+& ([scriptblock]::Create(`$bootstrap)) $commonArgs
+"@
+}
+
+function Start-ElevatedBootstrap {
+    $command = New-BootstrapCommand
+    $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+
+    Write-Step "Administrator approval required"
+    Write-Info "WSL installation needs elevation. Approve the UAC prompt in the new PowerShell window."
+
+    try {
+        Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList @(
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-EncodedCommand",
+            $encodedCommand
+        ) | Out-Null
+    } catch {
+        throw "Could not start elevated PowerShell. Open PowerShell as Administrator and rerun the bootstrap one-liner."
+    }
+}
+
+function Request-AdministratorForWsl {
     if ($SkipWsl) {
-        return
+        return $false
     }
 
     $distros = @(Get-WslDistros)
     if ($distros.Count -gt 0) {
-        return
+        return $false
     }
 
     if (Test-IsAdministrator) {
-        return
+        return $false
     }
 
-    throw "WSL installation requires Administrator. Open PowerShell as Administrator and rerun the one-liner, or run this script with -SkipWsl."
+    Start-ElevatedBootstrap
+    Write-Info "This non-elevated run will stop now. Continue in the elevated window."
+    return $true
 }
 
 function Assert-Winget {
@@ -210,9 +263,12 @@ try {
     Write-Info "Could not force TLS 1.2; continuing with system defaults."
 }
 
+if (Request-AdministratorForWsl) {
+    return
+}
+
 Write-Step "Checking Windows package manager"
 Assert-Winget
-Assert-AdministratorForWsl
 
 Install-WingetPackage -Id "Git.Git" -Name "Git"
 Install-WingetPackage -Id "GitHub.cli" -Name "GitHub CLI"

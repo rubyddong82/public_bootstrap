@@ -37,6 +37,9 @@ irm https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstra
 Run this from PowerShell as Administrator. WSL may require a reboot; if the
 script asks for one, restart Windows and run the same one-liner again.
 
+If you forget to start PowerShell as Administrator, the script will open a UAC
+prompt and continue in a new elevated PowerShell window.
+
 Safer version if you want to inspect the script first:
 
 ```powershell
