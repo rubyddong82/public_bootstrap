@@ -1,13 +1,9 @@
 [CmdletBinding()]
 param(
-    [string]$SetupRepo = "rubyddong82/private_bootstrap",
-    [string]$SetupDir = "$HOME\private_bootstrap",
-    [string]$SetupInstallScript = "install.ps1",
     [string]$WslDistribution = "Ubuntu",
     [string]$BootstrapUrl = "https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1",
     [int]$MaxParallelPackageInstalls = 2,
     [string]$StateDir = "",
-    [switch]$ForcePrivateSetup,
     [switch]$ResetCheckpoints,
     [switch]$NoRebootPrompt,
     [switch]$SkipWsl
@@ -221,13 +217,10 @@ function ConvertTo-QuotedPowerShellString {
 }
 
 function New-BootstrapCommand {
-    $setupRepoArg = ConvertTo-QuotedPowerShellString $SetupRepo
-    $setupDirArg = ConvertTo-QuotedPowerShellString $SetupDir
-    $setupInstallScriptArg = ConvertTo-QuotedPowerShellString $SetupInstallScript
     $wslDistributionArg = ConvertTo-QuotedPowerShellString $WslDistribution
     $stateDirArg = ConvertTo-QuotedPowerShellString (Resolve-StateDir)
 
-    $commonArgs = "-SetupRepo $setupRepoArg -SetupDir $setupDirArg -SetupInstallScript $setupInstallScriptArg -WslDistribution $wslDistributionArg -MaxParallelPackageInstalls $MaxParallelPackageInstalls -StateDir $stateDirArg"
+    $commonArgs = "-WslDistribution $wslDistributionArg -MaxParallelPackageInstalls $MaxParallelPackageInstalls -StateDir $stateDirArg"
 
     if ($SkipWsl) {
         $commonArgs += " -SkipWsl"
@@ -235,10 +228,6 @@ function New-BootstrapCommand {
 
     if ($NoRebootPrompt) {
         $commonArgs += " -NoRebootPrompt"
-    }
-
-    if ($ForcePrivateSetup) {
-        $commonArgs += " -ForcePrivateSetup"
     }
 
     if ($ResetCheckpoints) {
@@ -642,7 +631,7 @@ function Complete-WslInstallRequest {
 
 function Invoke-RestartPrompt {
     Write-Step "Restart recommended"
-    Write-Info "Restart Windows, then rerun the same bootstrap one-liner to continue with $SetupRepo."
+    Write-Info "Restart Windows, then rerun the same bootstrap one-liner to continue."
 
     if ($NoRebootPrompt) {
         Write-Info "Reboot prompt is disabled with -NoRebootPrompt."
@@ -761,89 +750,10 @@ function Install-Wsl {
     Complete-WslInstallRequest "WSL was installed. A Windows restart may be required before Linux setup can continue."
 }
 
-function Ensure-GhAuth {
-    Write-Step "Checking GitHub CLI authentication"
-    Write-Heartbeat "Running gh auth status."
-
-    gh auth status *> $null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Info "GitHub CLI is already authenticated."
-        return
-    }
-
-    Write-Info "Starting GitHub login."
-    Write-Heartbeat "Follow the prompts from GitHub CLI."
-    gh auth login
-}
-
-function Clone-SetupRepo {
-    if ([string]::IsNullOrWhiteSpace($SetupRepo)) {
-        Write-Step "No private setup repo requested"
-        Write-Info "Baseline tools are installed. Rerun with -SetupRepo owner/repo when ready."
-        return
-    }
-
-    if ((Test-Checkpoint "phase:private-setup") -and (-not $ForcePrivateSetup) -and (Test-Path $SetupDir)) {
-        Write-Step "Private setup already completed"
-        Write-Info "Checkpoint found for private setup. Use -ForcePrivateSetup to run it again."
-        return
-    }
-
-    if ((Test-Checkpoint "phase:private-setup") -and (-not (Test-Path $SetupDir))) {
-        Write-Info "Private setup checkpoint exists, but $SetupDir is missing. The repo will be cloned again."
-    }
-
-    Ensure-GhAuth
-
-    Write-Step "Preparing setup repo $SetupRepo"
-
-    if (Test-Path $SetupDir) {
-        Write-Info "$SetupDir already exists. Pulling latest changes."
-        Write-Heartbeat "Running git pull --ff-only."
-        Push-Location $SetupDir
-        try {
-            Invoke-ProcessWithHeartbeat `
-                -FilePath "git" `
-                -Arguments @("pull", "--ff-only") `
-                -Description "git pull for private bootstrap" `
-                -HeartbeatSeconds 15 | Out-Null
-        } finally {
-            Pop-Location
-        }
-    } else {
-        Write-Info "Cloning into $SetupDir."
-        Write-Heartbeat "Running gh repo clone."
-        Invoke-ProcessWithHeartbeat `
-            -FilePath "gh" `
-            -Arguments @("repo", "clone", $SetupRepo, $SetupDir) `
-            -Description "gh repo clone $SetupRepo" `
-            -HeartbeatSeconds 15 | Out-Null
-    }
-
-    $installPath = Join-Path $SetupDir $SetupInstallScript
-    if (-not (Test-Path $installPath)) {
-        Write-Host ""
-        Write-Host "Setup repo cloned, but $SetupInstallScript was not found." -ForegroundColor Yellow
-        Write-Host "Expected path: $installPath"
-        return
-    }
-
-    Write-Step "Running private setup installer"
-    Write-Heartbeat "Handing off to $installPath."
-    Invoke-ProcessWithHeartbeat `
-        -FilePath "powershell" `
-        -Arguments @("-ExecutionPolicy", "Bypass", "-File", $installPath) `
-        -Description "private setup installer" `
-        -HeartbeatSeconds 15 | Out-Null
-    Set-Checkpoint "phase:private-setup"
-}
-
 Save-BootstrapOneLiner
 
 Assert-Windows
 Write-Step "Starting public Windows bootstrap"
-Write-Info "Target private repo: $SetupRepo"
-Write-Info "Target clone path: $SetupDir"
 
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -865,12 +775,6 @@ $baselinePackages = @(
         Id = "Git.Git"
         Name = "Git"
         CommandNames = @("git")
-        TestPaths = @()
-    },
-    @{
-        Id = "GitHub.cli"
-        Name = "GitHub CLI"
-        CommandNames = @("gh")
         TestPaths = @()
     },
     @{
@@ -919,9 +823,9 @@ if ($script:RestartRecommended) {
 }
 
 Refresh-Path
-Clone-SetupRepo
 
 Write-Step "Bootstrap complete"
 Set-Checkpoint "phase:bootstrap"
 Write-Info "Open a new terminal so PATH changes are fully available."
+Write-Info "Use WSL for GitHub CLI and private bootstrap setup."
 

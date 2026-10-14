@@ -2,9 +2,9 @@
 
 This repo is the public, no-secret seed for a brand new machine.
 
-It exists because a fresh environment may not have Git, GitHub CLI, WSL, or the
-private setup repo yet. The first step needs to work with only the tools that
-ship with the operating system and a normal HTTPS download.
+It exists because a fresh environment may not have Git, WSL, or the baseline
+apps yet. The first step needs to work with only the tools that ship with the
+operating system and a normal HTTPS download.
 
 ## Windows Flow
 
@@ -14,7 +14,6 @@ ship with the operating system and a normal HTTPS download.
 4. Run the script.
 5. Let the script install baseline tools:
    - Git
-   - GitHub CLI
    - PowerShell 7
    - Windows Terminal
    - Visual Studio Code
@@ -23,9 +22,7 @@ ship with the operating system and a normal HTTPS download.
    - WSL with Ubuntu
 6. Restart Windows if WSL asks for it.
 7. Rerun the same one-liner after reboot.
-8. Log in to GitHub with `gh auth login`.
-9. Clone `rubyddong82/private_bootstrap`.
-10. Run the private repo's installer.
+8. Open WSL and run the Linux bootstrap for GitHub CLI and private setup.
 
 ## Windows Command
 
@@ -55,7 +52,7 @@ If you forget to start PowerShell as Administrator, the script will open a UAC
 prompt and continue in a new elevated PowerShell window.
 
 The script prints timestamped progress messages around slow installs so it is
-easier to tell when `winget`, WSL, or GitHub authentication is still working.
+easier to tell when `winget` or WSL is still working.
 Baseline Windows app installs run in parallel with a default limit of 2.
 Increase it only if you are okay with more installer contention:
 
@@ -71,8 +68,7 @@ The Windows bootstrap records checkpoints in:
 
 Rerunning the one-liner resumes from the previous successful work. Installed
 packages are still verified before they are skipped. Reset checkpoints with
-`-ResetCheckpoints`, or rerun the private setup installer with
-`-ForcePrivateSetup`.
+`-ResetCheckpoints`.
 
 Disable the interactive restart prompt with `-NoRebootPrompt`.
 
@@ -84,9 +80,8 @@ notepad "$env:TEMP\bootstrap.ps1"
 powershell -ExecutionPolicy Bypass -File "$env:TEMP\bootstrap.ps1"
 ```
 
-By default, the script installs baseline tools and then clones
-`rubyddong82/private_bootstrap`. You can override that target with `-SetupRepo`
-if needed.
+By default, the Windows script installs baseline tools and WSL only. GitHub CLI
+and `rubyddong82/private_bootstrap` are handled from the Linux/WSL bootstrap.
 
 WSL installs Ubuntu by default. You can override the distro with
 `-WslDistribution` or skip WSL with `-SkipWsl` when using the safer downloaded
@@ -95,10 +90,10 @@ script version.
 Google Chrome is installed by default. If `winget` hits a temporary hash or
 manifest problem, the script retries and then falls back to Google's direct MSI
 installer. Chrome is treated as optional so it will not block WSL or the private
-bootstrap if every Chrome install path fails.
+bootstrap path if every Chrome install path fails.
 
 Obsidian is attempted by default through `winget` on Windows. It is optional, so
-it will not block WSL or the private bootstrap if `winget` cannot install it.
+it will not block WSL if `winget` cannot install it.
 
 ## Linux Flow
 
