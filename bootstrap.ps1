@@ -7,11 +7,8 @@ param(
     [string]$BootstrapUrl = "https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1",
     [int]$MaxParallelPackageInstalls = 2,
     [string]$StateDir = "",
-    [string]$TimeZoneId = "Korea Standard Time",
-    [string]$TimePeer = "time.windows.com,0x9",
     [switch]$ForcePrivateSetup,
     [switch]$ResetCheckpoints,
-    [switch]$SkipTimeSync,
     [switch]$NoRebootPrompt,
     [switch]$SkipWsl
 )
@@ -205,17 +202,11 @@ function New-BootstrapCommand {
     $setupInstallScriptArg = ConvertTo-QuotedPowerShellString $SetupInstallScript
     $wslDistributionArg = ConvertTo-QuotedPowerShellString $WslDistribution
     $stateDirArg = ConvertTo-QuotedPowerShellString (Resolve-StateDir)
-    $timeZoneIdArg = ConvertTo-QuotedPowerShellString $TimeZoneId
-    $timePeerArg = ConvertTo-QuotedPowerShellString $TimePeer
 
-    $commonArgs = "-SetupRepo $setupRepoArg -SetupDir $setupDirArg -SetupInstallScript $setupInstallScriptArg -WslDistribution $wslDistributionArg -MaxParallelPackageInstalls $MaxParallelPackageInstalls -StateDir $stateDirArg -TimeZoneId $timeZoneIdArg -TimePeer $timePeerArg"
+    $commonArgs = "-SetupRepo $setupRepoArg -SetupDir $setupDirArg -SetupInstallScript $setupInstallScriptArg -WslDistribution $wslDistributionArg -MaxParallelPackageInstalls $MaxParallelPackageInstalls -StateDir $stateDirArg"
 
     if ($SkipWsl) {
         $commonArgs += " -SkipWsl"
-    }
-
-    if ($SkipTimeSync) {
-        $commonArgs += " -SkipTimeSync"
     }
 
     if ($NoRebootPrompt) {
@@ -291,83 +282,13 @@ function Request-AdministratorForBootstrap {
         return $false
     }
 
-    if ((-not $SkipTimeSync) -or (Test-WslInstallNeedsAdministrator)) {
+    if (Test-WslInstallNeedsAdministrator) {
         Start-ElevatedBootstrap
         Write-Info "This non-elevated run will stop now. Continue in the elevated window."
         return $true
     }
 
     return $false
-}
-
-function Repair-WindowsTime {
-    if ($SkipTimeSync) {
-        Write-Step "Skipping Windows time sync"
-        Write-Info "Time repair was disabled with -SkipTimeSync."
-        return
-    }
-
-    Write-Step "Checking Windows time"
-
-    if (-not [string]::IsNullOrWhiteSpace($TimeZoneId)) {
-        Write-Info "Setting Windows time zone to $TimeZoneId."
-        $timeZoneExitCode = Invoke-ProcessWithHeartbeat `
-            -FilePath "tzutil.exe" `
-            -Arguments @("/s", $TimeZoneId) `
-            -Description "set Windows time zone" `
-            -HeartbeatSeconds 5 `
-            -AllowFailure
-
-        if ($timeZoneExitCode -ne 0) {
-            Write-Info "Could not set time zone automatically. Continuing with clock sync."
-        }
-    }
-
-    Write-Info "Ensuring Windows Time service is automatic and running."
-    try {
-        Set-Service -Name "w32time" -StartupType Automatic
-        Start-Service -Name "w32time" -ErrorAction SilentlyContinue
-    } catch {
-        Write-Info "Could not fully start/configure w32time service: $($_.Exception.Message)"
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($TimePeer)) {
-        Write-Info "Configuring Windows Time peer: $TimePeer"
-        Invoke-ProcessWithHeartbeat `
-            -FilePath "w32tm.exe" `
-            -Arguments @("/config", "/syncfromflags:manual", "/manualpeerlist:$TimePeer", "/update") `
-            -Description "configure Windows Time peer" `
-            -HeartbeatSeconds 5 `
-            -AllowFailure | Out-Null
-    }
-
-    Write-Info "Restarting Windows Time service."
-    try {
-        Restart-Service -Name "w32time" -Force -ErrorAction Stop
-    } catch {
-        Write-Info "Could not restart w32time service: $($_.Exception.Message)"
-    }
-
-    Write-Info "Forcing a Windows clock resync."
-    $resyncExitCode = Invoke-ProcessWithHeartbeat `
-        -FilePath "w32tm.exe" `
-        -Arguments @("/resync", "/force") `
-        -Description "Windows clock resync" `
-        -HeartbeatSeconds 5 `
-        -AllowFailure
-
-    if ($resyncExitCode -ne 0) {
-        Write-Info "Clock resync did not report success. Windows may need a minute online before retrying."
-    }
-
-    Invoke-ProcessWithHeartbeat `
-        -FilePath "w32tm.exe" `
-        -Arguments @("/query", "/status") `
-        -Description "Windows Time status query" `
-        -HeartbeatSeconds 5 `
-        -AllowFailure | Out-Null
-
-    Write-Info "Windows time check finished."
 }
 
 function Assert-Winget {
@@ -909,7 +830,6 @@ if (Request-AdministratorForBootstrap) {
 }
 
 Initialize-Checkpoints
-Repair-WindowsTime
 
 Write-Step "Checking Windows package manager"
 Assert-Winget
