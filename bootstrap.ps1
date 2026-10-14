@@ -11,6 +11,10 @@ param(
 $ErrorActionPreference = "Stop"
 $script:RestartRecommended = $false
 
+function Get-Timestamp {
+    return (Get-Date).ToString("HH:mm:ss")
+}
+
 function Write-Step {
     param([string]$Message)
     Write-Host ""
@@ -19,7 +23,12 @@ function Write-Step {
 
 function Write-Info {
     param([string]$Message)
-    Write-Host "    $Message"
+    Write-Host "    [$((Get-Timestamp))] $Message"
+}
+
+function Write-Heartbeat {
+    param([string]$Message)
+    Write-Host "    [$((Get-Timestamp))] ... $Message" -ForegroundColor DarkGray
 }
 
 function Test-Command {
@@ -62,6 +71,8 @@ function New-BootstrapCommand {
         $scriptPathArg = ConvertTo-QuotedPowerShellString $PSCommandPath
         return @"
 `$ErrorActionPreference = 'Stop'
+Write-Host ''
+Write-Host '==> Elevated bootstrap resumed' -ForegroundColor Cyan
 & $scriptPathArg $commonArgs
 "@
     }
@@ -70,6 +81,9 @@ function New-BootstrapCommand {
     return @"
 `$ErrorActionPreference = 'Stop'
 `$ProgressPreference = 'SilentlyContinue'
+Write-Host ''
+Write-Host '==> Elevated bootstrap resumed' -ForegroundColor Cyan
+Write-Host '    Downloading latest bootstrap script...'
 `$bootstrap = irm $bootstrapUrlArg
 & ([scriptblock]::Create(`$bootstrap)) $commonArgs
 "@
@@ -84,6 +98,7 @@ function Start-ElevatedBootstrap {
 
     try {
         Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList @(
+            "-NoExit",
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
@@ -140,6 +155,7 @@ function Install-WingetPackage {
     )
 
     Write-Step "Checking $Name"
+    Write-Heartbeat "Querying winget for $Id."
 
     $listOutput = winget list --id $Id --exact --accept-source-agreements 2>$null
     if ($LASTEXITCODE -eq 0 -and ($listOutput -match [regex]::Escape($Id))) {
@@ -148,7 +164,13 @@ function Install-WingetPackage {
     }
 
     Write-Info "Installing $Name..."
+    Write-Heartbeat "winget may take a few minutes for $Name."
     winget install --id $Id --exact --source winget --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) {
+        throw "winget failed while installing $Name."
+    }
+
+    Write-Info "$Name install command finished."
 }
 
 function Get-WslDistros {
@@ -177,6 +199,7 @@ function Install-Wsl {
     }
 
     Write-Step "Checking WSL"
+    Write-Heartbeat "Looking for existing WSL distributions."
 
     $distros = @(Get-WslDistros)
     if ($distros.Count -gt 0) {
@@ -189,11 +212,13 @@ function Install-Wsl {
     }
 
     Write-Info "Installing WSL with $WslDistribution."
+    Write-Heartbeat "This can take several minutes and may appear quiet."
     wsl.exe --install -d $WslDistribution --no-launch
     $installExitCode = $LASTEXITCODE
 
     if ($installExitCode -notin @(0, 3010)) {
         Write-Info "Retrying WSL install with web download."
+        Write-Heartbeat "Downloading WSL package directly from Microsoft."
         wsl.exe --install --web-download -d $WslDistribution --no-launch
         $installExitCode = $LASTEXITCODE
     }
@@ -208,6 +233,7 @@ function Install-Wsl {
 
 function Ensure-GhAuth {
     Write-Step "Checking GitHub CLI authentication"
+    Write-Heartbeat "Running gh auth status."
 
     gh auth status *> $null
     if ($LASTEXITCODE -eq 0) {
@@ -216,6 +242,7 @@ function Ensure-GhAuth {
     }
 
     Write-Info "Starting GitHub login."
+    Write-Heartbeat "Follow the prompts from GitHub CLI."
     gh auth login
 }
 
@@ -232,6 +259,7 @@ function Clone-SetupRepo {
 
     if (Test-Path $SetupDir) {
         Write-Info "$SetupDir already exists. Pulling latest changes."
+        Write-Heartbeat "Running git pull --ff-only."
         Push-Location $SetupDir
         try {
             git pull --ff-only
@@ -240,6 +268,7 @@ function Clone-SetupRepo {
         }
     } else {
         Write-Info "Cloning into $SetupDir."
+        Write-Heartbeat "Running gh repo clone."
         gh repo clone $SetupRepo $SetupDir
     }
 
@@ -252,10 +281,14 @@ function Clone-SetupRepo {
     }
 
     Write-Step "Running private setup installer"
+    Write-Heartbeat "Handing off to $installPath."
     powershell -ExecutionPolicy Bypass -File $installPath
 }
 
 Assert-Windows
+Write-Step "Starting public Windows bootstrap"
+Write-Info "Target private repo: $SetupRepo"
+Write-Info "Target clone path: $SetupDir"
 
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12

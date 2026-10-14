@@ -40,6 +40,9 @@ script asks for one, restart Windows and run the same one-liner again.
 If you forget to start PowerShell as Administrator, the script will open a UAC
 prompt and continue in a new elevated PowerShell window.
 
+The script prints timestamped progress messages around slow installs so it is
+easier to tell when `winget`, WSL, or GitHub authentication is still working.
+
 Safer version if you want to inspect the script first:
 
 ```powershell
