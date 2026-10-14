@@ -1,12 +1,12 @@
-# New Laptop Bootstrap
+# Public Bootstrap
 
-This repo is the public, no-secret seed for a brand new Windows laptop.
+This repo is the public, no-secret seed for a brand new machine.
 
-It exists because a fresh Windows environment may not have Git, WSL, PowerShell 7,
-or GitHub CLI yet. The first step needs to work with built-in Windows PowerShell
-and a normal HTTPS download.
+It exists because a fresh environment may not have Git, GitHub CLI, WSL, or the
+private setup repo yet. The first step needs to work with only the tools that
+ship with the operating system and a normal HTTPS download.
 
-## Intended Flow
+## Windows Flow
 
 1. Start from a clean Windows install.
 2. Open built-in PowerShell as Administrator.
@@ -17,19 +17,21 @@ and a normal HTTPS download.
    - GitHub CLI
    - PowerShell 7
    - Windows Terminal
+   - Visual Studio Code
+   - Google Chrome
    - WSL with Ubuntu
 6. Restart Windows if WSL asks for it.
 7. Rerun the same one-liner after reboot.
 8. Log in to GitHub with `gh auth login`.
-9. Clone the private machine setup repo.
+9. Clone `rubyddong82/private_bootstrap`.
 10. Run the private repo's installer.
 
-## Fresh Machine Command
+## Windows Command
 
 Minimal one-liner:
 
 ```powershell
-irm https://raw.githubusercontent.com/rubyddong82/laptop-bootstrap/main/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1 | iex
 ```
 
 Run this from PowerShell as Administrator. WSL may require a reboot; if the
@@ -38,26 +40,66 @@ script asks for one, restart Windows and run the same one-liner again.
 Safer version if you want to inspect the script first:
 
 ```powershell
-iwr https://raw.githubusercontent.com/rubyddong82/laptop-bootstrap/main/bootstrap.ps1 -OutFile "$env:TEMP\bootstrap.ps1"
+iwr https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1 -OutFile "$env:TEMP\bootstrap.ps1"
 notepad "$env:TEMP\bootstrap.ps1"
 powershell -ExecutionPolicy Bypass -File "$env:TEMP\bootstrap.ps1"
 ```
 
 By default, the script installs baseline tools and then clones
-`rubyddong82/laptop-setup`. You can override that target with `-SetupRepo` if
-needed.
+`rubyddong82/private_bootstrap`. You can override that target with `-SetupRepo`
+if needed.
 
 WSL installs Ubuntu by default. You can override the distro with
 `-WslDistribution` or skip WSL with `-SkipWsl` when using the safer downloaded
 script version.
+
+## Linux Flow
+
+1. Start from a fresh Linux install.
+2. Open a terminal.
+3. Download this repo's `bootstrap.sh` from `raw.githubusercontent.com`.
+4. Run the script.
+5. Let the script install baseline tools:
+   - curl and certificates
+   - Git
+   - GitHub CLI
+   - Visual Studio Code
+   - Google Chrome
+6. Log in to GitHub with `gh auth login`.
+7. Clone `rubyddong82/private_bootstrap`.
+8. Run the private repo's Linux installer.
+
+## Linux Command
+
+Minimal one-liner:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.sh | bash
+```
+
+Safer version if you want to inspect the script first:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.sh -o /tmp/bootstrap.sh
+less /tmp/bootstrap.sh
+bash /tmp/bootstrap.sh
+```
+
+The Linux script is Ubuntu/Debian-first, with basic support for other common
+package managers. Override the private repo or clone path with environment
+variables:
+
+```bash
+SETUP_REPO=rubyddong82/private_bootstrap SETUP_DIR="$HOME/private_bootstrap" bash /tmp/bootstrap.sh
+```
 
 ## Repo Split
 
 Use two repos:
 
 ```text
-public:  laptop-bootstrap
-private: laptop-setup
+public:  public_bootstrap
+private: private_bootstrap
 ```
 
 The public bootstrap repo should contain only generic setup logic. It should be
@@ -106,15 +148,17 @@ or connect to a password manager later.
 - Print clear next steps when something needs manual attention.
 - Delegate real customization to the private setup repo.
 
-## Later Private Repo Shape
+## Private Repo Shape
 
 The private setup repo can look like this:
 
 ```text
-laptop-setup/
+private_bootstrap/
 ├─ install.ps1
+├─ install.sh
 ├─ packages/
 │  ├─ winget.json
+│  ├─ apt.txt
 │  ├─ scoop.ps1
 │  └─ npm-global.txt
 ├─ windows/

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$SetupRepo = "rubyddong82/laptop-setup",
-    [string]$SetupDir = "$HOME\laptop-setup",
+    [string]$SetupRepo = "rubyddong82/private_bootstrap",
+    [string]$SetupDir = "$HOME\private_bootstrap",
     [string]$SetupInstallScript = "install.ps1",
     [string]$WslDistribution = "Ubuntu",
     [switch]$SkipWsl
@@ -217,6 +217,8 @@ Install-WingetPackage -Id "Git.Git" -Name "Git"
 Install-WingetPackage -Id "GitHub.cli" -Name "GitHub CLI"
 Install-WingetPackage -Id "Microsoft.PowerShell" -Name "PowerShell 7"
 Install-WingetPackage -Id "Microsoft.WindowsTerminal" -Name "Windows Terminal"
+Install-WingetPackage -Id "Microsoft.VisualStudioCode" -Name "Visual Studio Code"
+Install-WingetPackage -Id "Google.Chrome" -Name "Google Chrome"
 
 Install-Wsl
 
