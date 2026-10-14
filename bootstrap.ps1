@@ -12,6 +12,7 @@ param(
     [switch]$ForcePrivateSetup,
     [switch]$ResetCheckpoints,
     [switch]$SkipTimeSync,
+    [switch]$NoRebootPrompt,
     [switch]$SkipWsl
 )
 
@@ -215,6 +216,10 @@ function New-BootstrapCommand {
 
     if ($SkipTimeSync) {
         $commonArgs += " -SkipTimeSync"
+    }
+
+    if ($NoRebootPrompt) {
+        $commonArgs += " -NoRebootPrompt"
     }
 
     if ($ForcePrivateSetup) {
@@ -688,7 +693,63 @@ function Complete-WslInstallRequest {
     $script:RestartRecommended = $true
     Set-Checkpoint "phase:wsl-install-requested"
     Write-Info $Message
-    Write-Info "Restart Windows, then rerun the same bootstrap one-liner to continue."
+}
+
+function Invoke-RestartPrompt {
+    Write-Step "Restart recommended"
+    Write-Info "Restart Windows, then rerun the same bootstrap one-liner to continue with $SetupRepo."
+
+    if ($NoRebootPrompt) {
+        Write-Info "Reboot prompt is disabled with -NoRebootPrompt."
+        return
+    }
+
+    Write-Host ""
+    $answer = Read-Host "Type yes to restart Windows now, or press Enter to do it later"
+    if ($answer.Trim().ToLowerInvariant() -notin @("yes", "y")) {
+        Write-Info "Restart skipped. Rerun the same bootstrap one-liner after restarting manually."
+        return
+    }
+
+    Refresh-Path
+
+    $restartShell = "pwsh"
+    if (-not (Test-Command "pwsh")) {
+        $pwshCandidates = @(
+            "$env:ProgramFiles\PowerShell\7\pwsh.exe",
+            "${env:ProgramFiles(x86)}\PowerShell\7\pwsh.exe"
+        )
+
+        foreach ($candidate in $pwshCandidates) {
+            if ((-not [string]::IsNullOrWhiteSpace($candidate)) -and (Test-Path $candidate)) {
+                $restartShell = $candidate
+                break
+            }
+        }
+    }
+
+    if (($restartShell -eq "pwsh") -and (-not (Test-Command "pwsh"))) {
+        Write-Info "pwsh was not found yet. Falling back to Windows PowerShell for the restart command."
+        $restartShell = "powershell.exe"
+    }
+
+    Write-Info "Restarting Windows now with $restartShell."
+    $restartExitCode = Invoke-ProcessWithHeartbeat `
+        -FilePath $restartShell `
+        -Arguments @("-NoProfile", "-Command", "Restart-Computer -Force") `
+        -Description "PowerShell restart command" `
+        -HeartbeatSeconds 5 `
+        -AllowFailure
+
+    if (($null -ne $restartExitCode) -and ($restartExitCode -ne 0)) {
+        Write-Info "Restart-Computer exited with $restartExitCode. Trying shutdown.exe fallback."
+        Invoke-ProcessWithHeartbeat `
+            -FilePath "shutdown.exe" `
+            -Arguments @("/r", "/t", "5") `
+            -Description "shutdown.exe restart fallback" `
+            -HeartbeatSeconds 5 `
+            -AllowFailure | Out-Null
+    }
 }
 
 function Install-Wsl {
@@ -907,8 +968,7 @@ Install-WingetPackages -Packages $baselinePackages
 Install-Wsl
 
 if ($script:RestartRecommended) {
-    Write-Step "Restart recommended"
-    Write-Info "Restart Windows, then rerun the same bootstrap one-liner to continue with $SetupRepo."
+    Invoke-RestartPrompt
     return
 }
 

@@ -42,8 +42,9 @@ Verbose one-liner:
 $u="https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1"; Write-Host "Downloading bootstrap..."; $s=irm -TimeoutSec 120 $u; Write-Host "Running bootstrap..."; iex $s
 ```
 
-Run this from PowerShell as Administrator. WSL may require a reboot; if the
-script asks for one, restart Windows and run the same one-liner again.
+Run this from PowerShell as Administrator. WSL may require a reboot; if it does,
+the script asks whether to restart now. Type `yes` to reboot through PowerShell,
+then run the same one-liner again after Windows comes back.
 
 If you forget to start PowerShell as Administrator, the script will open a UAC
 prompt and continue in a new elevated PowerShell window.
@@ -83,6 +84,8 @@ Rerunning the one-liner resumes from the previous successful work. Installed
 packages are still verified before they are skipped. Reset checkpoints with
 `-ResetCheckpoints`, or rerun the private setup installer with
 `-ForcePrivateSetup`.
+
+Disable the interactive restart prompt with `-NoRebootPrompt`.
 
 Safer version if you want to inspect the script first:
 
