@@ -22,7 +22,7 @@ operating system and a normal HTTPS download.
    - WSL with Ubuntu
 6. Restart Windows if WSL asks for it.
 7. Rerun the same one-liner after reboot.
-8. Let the script run the Linux bootstrap inside WSL for GitHub CLI, GitHub SSH and private setup.
+8. Let the script run the Linux bootstrap inside WSL for GitHub CLI and GitHub SSH.
 
 ## Windows Command
 
@@ -87,8 +87,8 @@ powershell -ExecutionPolicy Bypass -File "$env:TEMP\bootstrap.ps1"
 ```
 
 By default, the Windows script installs baseline tools and WSL, then runs the
-Linux bootstrap inside WSL. That Linux bootstrap installs GitHub CLI and handles
-`rubyddong82/private_bootstrap`.
+Linux bootstrap inside WSL. That Linux bootstrap installs GitHub CLI, logs in,
+and sets up the WSL SSH key.
 
 WSL installs Ubuntu by default. You can override the distro with
 `-WslDistribution` or skip WSL with `-SkipWsl` when using the safer downloaded
@@ -102,8 +102,8 @@ Chrome, and Obsidian are installed on Windows instead.
 
 Google Chrome is installed by default. If `winget` hits a temporary hash or
 manifest problem, the script retries and then falls back to Google's direct MSI
-installer. Chrome is treated as optional so it will not block WSL or the private
-bootstrap path if every Chrome install path fails.
+installer. Chrome is treated as optional so it will not block WSL or the Linux
+bootstrap if every Chrome install path fails.
 
 Obsidian is attempted by default through `winget` on Windows. It is optional, so
 it will not block WSL if `winget` cannot install it.
@@ -123,8 +123,6 @@ it will not block WSL if `winget` cannot install it.
    - Google Chrome
 6. Log in to GitHub with `gh auth login`.
 7. Set up GitHub SSH (see below).
-8. Clone `rubyddong82/private_bootstrap`.
-9. Run the private repo's Linux installer.
 
 ### GitHub SSH (Linux / WSL)
 
@@ -158,12 +156,7 @@ bash /tmp/bootstrap.sh
 ```
 
 The Linux script is Ubuntu/Debian-first, with basic support for other common
-package managers. Override the private repo or clone path with environment
-variables:
-
-```bash
-SETUP_REPO=rubyddong82/private_bootstrap SETUP_DIR="$HOME/private_bootstrap" bash /tmp/bootstrap.sh
-```
+package managers.
 
 On a normal Linux install, desktop apps are installed by default. On WSL they are
 skipped by default. Override with `INSTALL_DESKTOP_APPS=true` or

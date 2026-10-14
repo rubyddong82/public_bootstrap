@@ -939,8 +939,8 @@ Write-Step "Windows bootstrap complete"
 Set-Checkpoint "phase:bootstrap"
 Write-Info "Open a new terminal so PATH changes are fully available."
 if ($script:WslLinuxBootstrapAttempted -and (-not $script:WslLinuxBootstrapSucceeded)) {
-    Write-Info "WSL Linux bootstrap still needs a retry before GitHub CLI/private setup are complete."
+    Write-Info "WSL Linux bootstrap still needs a retry before GitHub CLI and SSH setup are complete."
 } else {
-    Write-Info "Use WSL for GitHub CLI and private bootstrap setup."
+    Write-Info "GitHub CLI and SSH are set up inside WSL."
 }
 
