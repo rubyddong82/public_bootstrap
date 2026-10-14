@@ -5,6 +5,7 @@ param(
     [string]$SetupInstallScript = "install.ps1",
     [string]$WslDistribution = "Ubuntu",
     [string]$BootstrapUrl = "https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1",
+    [int]$MaxParallelPackageInstalls = 2,
     [switch]$SkipWsl
 )
 
@@ -97,7 +98,7 @@ function New-BootstrapCommand {
     $setupInstallScriptArg = ConvertTo-QuotedPowerShellString $SetupInstallScript
     $wslDistributionArg = ConvertTo-QuotedPowerShellString $WslDistribution
 
-    $commonArgs = "-SetupRepo $setupRepoArg -SetupDir $setupDirArg -SetupInstallScript $setupInstallScriptArg -WslDistribution $wslDistributionArg"
+    $commonArgs = "-SetupRepo $setupRepoArg -SetupDir $setupDirArg -SetupInstallScript $setupInstallScriptArg -WslDistribution $wslDistributionArg -MaxParallelPackageInstalls $MaxParallelPackageInstalls"
 
     if (-not [string]::IsNullOrWhiteSpace($PSCommandPath) -and (Test-Path $PSCommandPath)) {
         $scriptPathArg = ConvertTo-QuotedPowerShellString $PSCommandPath
@@ -180,43 +181,122 @@ function Assert-Winget {
     throw "winget is required before this bootstrap can continue."
 }
 
-function Install-WingetPackage {
+function Test-PackageInstalled {
     param(
-        [string]$Id,
-        [string]$Name,
-        [string[]]$CommandNames = @(),
-        [string[]]$TestPaths = @()
+        [hashtable]$Package
     )
 
-    Write-Step "Checking $Name"
+    Write-Step "Checking $($Package.Name)"
 
-    foreach ($commandName in $CommandNames) {
+    foreach ($commandName in @($Package.CommandNames)) {
         Write-Heartbeat "Looking for command $commandName."
         if (Test-Command $commandName) {
-            Write-Info "$Name is already installed."
-            return
+            Write-Info "$($Package.Name) is already installed."
+            return $true
         }
     }
 
-    foreach ($testPath in $TestPaths) {
+    foreach ($testPath in @($Package.TestPaths)) {
         if ([string]::IsNullOrWhiteSpace($testPath)) {
             continue
         }
 
         Write-Heartbeat "Looking for $testPath."
         if (Test-Path $testPath) {
-            Write-Info "$Name is already installed."
-            return
+            Write-Info "$($Package.Name) is already installed."
+            return $true
         }
     }
 
-    Write-Info "Installing $Name..."
-    Write-Heartbeat "winget may take a few minutes for $Name."
-    Invoke-ProcessWithHeartbeat `
+    return $false
+}
+
+function Start-WingetPackageProcess {
+    param([hashtable]$Package)
+
+    Write-Info "Starting $($Package.Name) install."
+    Write-Heartbeat "winget may take a few minutes for $($Package.Name)."
+
+    $process = Start-Process `
         -FilePath "winget" `
-        -Arguments @("install", "--id", $Id, "--exact", "--source", "winget", "--accept-package-agreements", "--accept-source-agreements") `
-        -Description "winget install $Name" `
-        -HeartbeatSeconds 20 | Out-Null
+        -ArgumentList @("install", "--id", $Package.Id, "--exact", "--source", "winget", "--accept-package-agreements", "--accept-source-agreements") `
+        -NoNewWindow `
+        -PassThru
+
+    return [pscustomobject]@{
+        Name = $Package.Name
+        Id = $Package.Id
+        Process = $process
+        StartedAt = Get-Date
+        LastHeartbeatAt = Get-Date
+    }
+}
+
+function Install-WingetPackages {
+    param([hashtable[]]$Packages)
+
+    Write-Step "Checking baseline app packages"
+    Write-Info "Package installs will run with max parallelism: $MaxParallelPackageInstalls"
+
+    $pending = New-Object System.Collections.ArrayList
+    foreach ($package in $Packages) {
+        if (-not (Test-PackageInstalled -Package $package)) {
+            [void]$pending.Add($package)
+        }
+    }
+
+    if ($pending.Count -eq 0) {
+        Write-Info "All baseline app packages are already installed."
+        return
+    }
+
+    $maxParallel = [Math]::Max(1, $MaxParallelPackageInstalls)
+    $active = New-Object System.Collections.ArrayList
+    $failures = New-Object System.Collections.ArrayList
+
+    Write-Step "Installing baseline app packages"
+    Write-Info "Pending packages: $($pending.Count)"
+
+    while ($pending.Count -gt 0 -or $active.Count -gt 0) {
+        while ($pending.Count -gt 0 -and $active.Count -lt $maxParallel) {
+            $package = $pending[0]
+            $pending.RemoveAt(0)
+            $record = Start-WingetPackageProcess -Package $package
+            [void]$active.Add($record)
+        }
+
+        Start-Sleep -Seconds 5
+
+        for ($index = $active.Count - 1; $index -ge 0; $index--) {
+            $record = $active[$index]
+            $process = $record.Process
+
+            if ($process.HasExited) {
+                $process.WaitForExit()
+                Write-Info "$($record.Name) install finished with exit code $($process.ExitCode)."
+
+                if ($process.ExitCode -ne 0) {
+                    [void]$failures.Add("$($record.Name) ($($record.Id)) exited with $($process.ExitCode)")
+                }
+
+                $active.RemoveAt($index)
+                continue
+            }
+
+            $secondsSinceHeartbeat = [int]((Get-Date) - $record.LastHeartbeatAt).TotalSeconds
+            if ($secondsSinceHeartbeat -ge 20) {
+                $elapsed = [int]((Get-Date) - $record.StartedAt).TotalSeconds
+                Write-Heartbeat "$($record.Name) install still running after $elapsed seconds."
+                $record.LastHeartbeatAt = Get-Date
+            }
+        }
+    }
+
+    if ($failures.Count -gt 0) {
+        throw "One or more winget installs failed: $($failures -join '; ')"
+    }
+
+    Write-Info "Baseline app package installs finished."
 }
 
 function Get-WslDistros {
@@ -370,16 +450,46 @@ if (Request-AdministratorForWsl) {
 Write-Step "Checking Windows package manager"
 Assert-Winget
 
-Install-WingetPackage -Id "Git.Git" -Name "Git" -CommandNames @("git")
-Install-WingetPackage -Id "GitHub.cli" -Name "GitHub CLI" -CommandNames @("gh")
-Install-WingetPackage -Id "Microsoft.PowerShell" -Name "PowerShell 7" -CommandNames @("pwsh")
-Install-WingetPackage -Id "Microsoft.WindowsTerminal" -Name "Windows Terminal" -CommandNames @("wt")
-Install-WingetPackage -Id "Microsoft.VisualStudioCode" -Name "Visual Studio Code" -CommandNames @("code")
-Install-WingetPackage `
-    -Id "Google.Chrome" `
-    -Name "Google Chrome" `
-    -CommandNames @("chrome", "chrome.exe") `
-    -TestPaths @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe")
+$baselinePackages = @(
+    @{
+        Id = "Git.Git"
+        Name = "Git"
+        CommandNames = @("git")
+        TestPaths = @()
+    },
+    @{
+        Id = "GitHub.cli"
+        Name = "GitHub CLI"
+        CommandNames = @("gh")
+        TestPaths = @()
+    },
+    @{
+        Id = "Microsoft.PowerShell"
+        Name = "PowerShell 7"
+        CommandNames = @("pwsh")
+        TestPaths = @()
+    },
+    @{
+        Id = "Microsoft.WindowsTerminal"
+        Name = "Windows Terminal"
+        CommandNames = @("wt")
+        TestPaths = @()
+    },
+    @{
+        Id = "Microsoft.VisualStudioCode"
+        Name = "Visual Studio Code"
+        CommandNames = @("code")
+        TestPaths = @()
+    },
+    @{
+        Id = "Google.Chrome"
+        Name = "Google Chrome"
+        CommandNames = @("chrome", "chrome.exe")
+        TestPaths = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe")
+    }
+)
+
+Install-WingetPackages -Packages $baselinePackages
 
 Install-Wsl
 

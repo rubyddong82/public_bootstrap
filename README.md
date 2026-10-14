@@ -48,6 +48,12 @@ prompt and continue in a new elevated PowerShell window.
 
 The script prints timestamped progress messages around slow installs so it is
 easier to tell when `winget`, WSL, or GitHub authentication is still working.
+Baseline Windows app installs run in parallel with a default limit of 2.
+Increase it only if you are okay with more installer contention:
+
+```powershell
+$s=irm https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1; & ([scriptblock]::Create($s)) -MaxParallelPackageInstalls 3
+```
 
 Safer version if you want to inspect the script first:
 
