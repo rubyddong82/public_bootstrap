@@ -4,6 +4,7 @@ set -Eeuo pipefail
 SETUP_REPO="${SETUP_REPO:-rubyddong82/private_bootstrap}"
 SETUP_DIR="${SETUP_DIR:-$HOME/private_bootstrap}"
 SETUP_INSTALL_SCRIPT="${SETUP_INSTALL_SCRIPT:-install.sh}"
+INSTALL_DESKTOP_APPS="${INSTALL_DESKTOP_APPS:-auto}"
 
 log_step() {
     printf '\n==> %s\n' "$1"
@@ -20,6 +21,34 @@ die() {
 
 has_command() {
     command -v "$1" >/dev/null 2>&1
+}
+
+is_wsl() {
+    if [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ]; then
+        return 0
+    fi
+
+    grep -qi microsoft /proc/version 2>/dev/null
+}
+
+should_install_desktop_apps() {
+    case "$INSTALL_DESKTOP_APPS" in
+        1|true|yes|on)
+            return 0
+            ;;
+        0|false|no|off)
+            return 1
+            ;;
+        auto)
+            if is_wsl; then
+                return 1
+            fi
+            return 0
+            ;;
+        *)
+            die "INSTALL_DESKTOP_APPS must be auto, true, or false."
+            ;;
+    esac
 }
 
 as_root() {
@@ -238,6 +267,11 @@ install_chrome_rpm_package() {
 
 install_desktop_apps() {
     log_step "Checking desktop apps"
+
+    if ! should_install_desktop_apps; then
+        log_info "Skipping Linux desktop apps. WSL uses the Windows installs for VS Code, Chrome, and Obsidian."
+        return
+    fi
 
     if has_command apt-get; then
         ensure_sudo

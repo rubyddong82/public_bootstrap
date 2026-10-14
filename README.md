@@ -95,6 +95,9 @@ script version.
 On the first WSL run, Ubuntu may ask you to create a Linux user. The Linux
 bootstrap may also ask for a sudo password or `gh auth login`.
 
+When the Linux bootstrap runs inside WSL, it skips Linux desktop apps. VS Code,
+Chrome, and Obsidian are installed on Windows instead.
+
 Google Chrome is installed by default. If `winget` hits a temporary hash or
 manifest problem, the script retries and then falls back to Google's direct MSI
 installer. Chrome is treated as optional so it will not block WSL or the private
@@ -144,8 +147,13 @@ variables:
 SETUP_REPO=rubyddong82/private_bootstrap SETUP_DIR="$HOME/private_bootstrap" bash /tmp/bootstrap.sh
 ```
 
-On Ubuntu/Debian, Obsidian is installed from the official GitHub release `.deb`.
-Other Linux package managers currently skip Obsidian and continue.
+On a normal Linux install, desktop apps are installed by default. On WSL they are
+skipped by default. Override with `INSTALL_DESKTOP_APPS=true` or
+`INSTALL_DESKTOP_APPS=false`.
+
+On Ubuntu/Debian, Obsidian is installed from the official GitHub release `.deb`
+when desktop apps are enabled. Other Linux package managers currently skip
+Obsidian and continue.
 
 ## Repo Split
 
