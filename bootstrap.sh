@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# If sourced, run in a child bash so set -e/exit don't affect the calling shell.
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  bash "${BASH_SOURCE[0]}" "$@"
+  return
+fi
+
 set -Eeuo pipefail
 
 GITHUB_SSH_OK=0
