@@ -348,25 +348,51 @@ ensure_gh_auth() {
 }
 
 ensure_github_ssh() {
-    log_step "Setting up GitHub SSH access"
+    log_step "Setting up GitHub SSH access (WSL/Linux key only)"
 
-    local key="$HOME/.ssh/id_ed25519"
-    local ssh_out
-    mkdir -p "$HOME/.ssh"
-    chmod 700 "$HOME/.ssh"
+    # Only the Linux-side key counts. Never use a Windows key, ssh.exe, or an agent
+    # forwarded from Windows when deciding whether SSH is already set up.
+    local ssh_bin=/usr/bin/ssh keygen_bin=/usr/bin/ssh-keygen
+    if [ ! -x "$ssh_bin" ] || [ ! -x "$keygen_bin" ]; then
+        log_info "Linux OpenSSH client not found; installing openssh-client."
+        if has_command apt-get; then
+            as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-client
+        fi
+        if [ ! -x "$ssh_bin" ] || [ ! -x "$keygen_bin" ]; then
+            log_info "Could not find /usr/bin/ssh; skipping SSH setup."
+            return 0
+        fi
+    fi
+
+    local ssh_dir="$HOME/.ssh" key="$HOME/.ssh/id_ed25519" ssh_out
+    mkdir -p "$ssh_dir"
+    chmod 700 "$ssh_dir"
+    case "$(readlink -f "$ssh_dir")" in
+        /mnt/*)
+            log_info "$ssh_dir points into the Windows filesystem ($(readlink -f "$ssh_dir"))."
+            log_info "Replace it with a real Linux directory and rerun; skipping SSH setup."
+            return 0
+            ;;
+    esac
 
     if [ ! -f "$key" ]; then
-        log_info "Generating ed25519 key. Enter a passphrase when prompted (empty for none)."
-        ssh-keygen -t ed25519 -C "$USER@$(hostname)" -f "$key" || { log_info "ssh-keygen failed; skipping SSH setup."; return 0; }
+        log_info "No WSL/Linux SSH key found. Generating $key (enter a passphrase, or empty for none)."
+        "$keygen_bin" -t ed25519 -C "$USER@$(hostname)" -f "$key" || { log_info "ssh-keygen failed; skipping SSH setup."; return 0; }
     else
-        log_info "SSH key already exists: $key"
+        log_info "Linux SSH key already exists: $key"
     fi
 
-    ssh_out="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 || true)"
+    github_ssh_test() {
+        "$ssh_bin" -F /dev/null -i "$key" -o IdentitiesOnly=yes -o IdentityAgent=none \
+            -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 || true
+    }
+
+    ssh_out="$(github_ssh_test)"
     if printf '%s' "$ssh_out" | grep -q "successfully authenticated"; then
-        log_info "GitHub SSH already works; nothing to do."
+        log_info "GitHub already accepts the WSL key; nothing to do."
         return 0
     fi
+    log_info "GitHub does not accept the WSL key yet; registering it."
 
     if ! gh auth status -h github.com >/dev/null 2>&1; then
         gh auth login -h github.com -p ssh -s admin:public_key --skip-ssh-key || { log_info "gh auth login failed; skipping SSH setup."; return 0; }
@@ -378,15 +404,15 @@ ensure_github_ssh() {
     local local_key
     local_key="$(awk '{print $2}' "$key.pub")"
     if gh ssh-key list 2>/dev/null | grep -qF "$local_key"; then
-        log_info "This SSH key is already registered on GitHub."
+        log_info "This WSL key is already registered on GitHub."
     else
-        gh ssh-key add "$key.pub" --title "$(hostname)" && log_info "SSH key added to GitHub as '$(hostname)'." \
+        gh ssh-key add "$key.pub" --title "$(hostname)-wsl" && log_info "WSL key added to GitHub as '$(hostname)-wsl'." \
             || { log_info "gh ssh-key add failed; add it manually."; return 0; }
     fi
 
-    ssh_out="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 || true)"
+    ssh_out="$(github_ssh_test)"
     if printf '%s' "$ssh_out" | grep -q "successfully authenticated"; then
-        log_info "GitHub SSH test passed."
+        log_info "GitHub SSH test passed with the WSL key."
     else
         log_info "GitHub SSH test did not confirm authentication: $ssh_out"
         log_info "If the key has a passphrase, load it with ssh-add and run: ssh -T git@github.com"
