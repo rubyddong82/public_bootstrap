@@ -13,6 +13,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $script:RestartRecommended = $false
+$script:WslLinuxBootstrapAttempted = $false
+$script:WslLinuxBootstrapSucceeded = $false
 $script:StateFile = ""
 $script:CompletedCheckpoints = New-Object "System.Collections.Generic.HashSet[string]"
 
@@ -220,7 +222,12 @@ function ConvertTo-QuotedPowerShellString {
 
 function ConvertTo-QuotedBashString {
     param([string]$Value)
-    return "'" + ($Value -replace "'", "'\''") + "'"
+
+    if ($null -eq $Value) {
+        return "''"
+    }
+
+    return "'" + $Value.Replace("'", "'\''") + "'"
 }
 
 function New-BootstrapCommand {
@@ -689,10 +696,10 @@ function Invoke-WslLinuxBootstrap {
     Write-Info "If WSL asks you to create a Linux user or enter a sudo password, answer in this terminal."
 
     $linuxBootstrapUrlArg = ConvertTo-QuotedBashString $LinuxBootstrapUrl
-    $bashCommand = "set -Eeuo pipefail; url=$linuxBootstrapUrlArg; " +
-        'if command -v curl >/dev/null 2>&1; then curl -fsSL "$url" | bash; ' +
-        'elif command -v wget >/dev/null 2>&1; then wget -qO- "$url" | bash; ' +
-        'else sudo apt-get update && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates && curl -fsSL "$url" | bash; fi'
+    $bashCommand = "set -Eeuo pipefail; " +
+        "if command -v curl >/dev/null 2>&1; then curl -fsSL $linuxBootstrapUrlArg | bash; " +
+        "elif command -v wget >/dev/null 2>&1; then wget -qO- $linuxBootstrapUrlArg | bash; " +
+        "else sudo apt-get update && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates && curl -fsSL $linuxBootstrapUrlArg | bash; fi"
 
     $bootstrapAttempts = @(
         @{
@@ -706,6 +713,7 @@ function Invoke-WslLinuxBootstrap {
     )
 
     $bootstrapExitCode = $null
+    $script:WslLinuxBootstrapAttempted = $true
     foreach ($attempt in $bootstrapAttempts) {
         Write-Info "Trying Linux bootstrap with $($attempt.Name)."
         $bootstrapExitCode = Invoke-ProcessWithHeartbeat `
@@ -724,6 +732,7 @@ function Invoke-WslLinuxBootstrap {
 
     if ($bootstrapExitCode -eq 0) {
         Set-Checkpoint "phase:wsl-linux-bootstrap"
+        $script:WslLinuxBootstrapSucceeded = $true
         Write-Info "WSL Linux bootstrap finished."
         return
     }
@@ -927,8 +936,12 @@ if ($script:RestartRecommended) {
 Refresh-Path
 Invoke-WslLinuxBootstrap
 
-Write-Step "Bootstrap complete"
+Write-Step "Windows bootstrap complete"
 Set-Checkpoint "phase:bootstrap"
 Write-Info "Open a new terminal so PATH changes are fully available."
-Write-Info "Use WSL for GitHub CLI and private bootstrap setup."
+if ($script:WslLinuxBootstrapAttempted -and (-not $script:WslLinuxBootstrapSucceeded)) {
+    Write-Info "WSL Linux bootstrap still needs a retry before GitHub CLI/private setup are complete."
+} else {
+    Write-Info "Use WSL for GitHub CLI and private bootstrap setup."
+}
 
