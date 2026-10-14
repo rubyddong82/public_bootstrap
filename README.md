@@ -32,11 +32,14 @@ Minimal one-liner:
 irm https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1 | iex
 ```
 
-The script saves that rerun helper to:
+The first thing the script does is save a rerun helper to:
 
 ```text
 %USERPROFILE%\Downloads\run-public-bootstrap.ps1
 ```
+
+That helper contains only the one-liner above, so rerunning it downloads the
+latest `bootstrap.ps1` from GitHub instead of using an old cached full script.
 
 Verbose one-liner:
 
