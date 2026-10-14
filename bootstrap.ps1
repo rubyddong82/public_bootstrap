@@ -6,11 +6,16 @@ param(
     [string]$WslDistribution = "Ubuntu",
     [string]$BootstrapUrl = "https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1",
     [int]$MaxParallelPackageInstalls = 2,
+    [string]$StateDir = "",
+    [switch]$ForcePrivateSetup,
+    [switch]$ResetCheckpoints,
     [switch]$SkipWsl
 )
 
 $ErrorActionPreference = "Stop"
 $script:RestartRecommended = $false
+$script:StateFile = ""
+$script:CompletedCheckpoints = New-Object "System.Collections.Generic.HashSet[string]"
 
 function Get-Timestamp {
     return (Get-Date).ToString("HH:mm:ss")
@@ -75,6 +80,62 @@ function Refresh-Path {
     $env:Path = "$machinePath;$userPath"
 }
 
+function Resolve-StateDir {
+    if (-not [string]::IsNullOrWhiteSpace($StateDir)) {
+        return $StateDir
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        return (Join-Path $env:LOCALAPPDATA "public_bootstrap")
+    }
+
+    return (Join-Path $HOME ".public_bootstrap")
+}
+
+function Initialize-Checkpoints {
+    $resolvedStateDir = Resolve-StateDir
+    $script:StateFile = Join-Path $resolvedStateDir "checkpoints.txt"
+    $script:CompletedCheckpoints.Clear()
+
+    if (-not (Test-Path $resolvedStateDir)) {
+        New-Item -ItemType Directory -Path $resolvedStateDir -Force | Out-Null
+    }
+
+    if ($ResetCheckpoints -and (Test-Path $script:StateFile)) {
+        Remove-Item $script:StateFile -Force
+        Write-Info "Existing checkpoints were reset."
+    }
+
+    if (Test-Path $script:StateFile) {
+        Get-Content $script:StateFile |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { [void]$script:CompletedCheckpoints.Add($_) }
+    } else {
+        New-Item -ItemType File -Path $script:StateFile -Force | Out-Null
+    }
+
+    Write-Info "Checkpoint file: $script:StateFile"
+}
+
+function Test-Checkpoint {
+    param([string]$Name)
+    return $script:CompletedCheckpoints.Contains($Name)
+}
+
+function Set-Checkpoint {
+    param([string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($script:StateFile)) {
+        return
+    }
+
+    if ($script:CompletedCheckpoints.Add($Name)) {
+        Add-Content -Path $script:StateFile -Value $Name -Encoding ASCII
+        Write-Info "Checkpoint saved: $Name"
+    }
+}
+
 function Assert-Windows {
     if (-not $IsWindows -and $PSVersionTable.PSEdition -eq "Core") {
         throw "This bootstrap script is intended for Windows."
@@ -97,8 +158,21 @@ function New-BootstrapCommand {
     $setupDirArg = ConvertTo-QuotedPowerShellString $SetupDir
     $setupInstallScriptArg = ConvertTo-QuotedPowerShellString $SetupInstallScript
     $wslDistributionArg = ConvertTo-QuotedPowerShellString $WslDistribution
+    $stateDirArg = ConvertTo-QuotedPowerShellString (Resolve-StateDir)
 
-    $commonArgs = "-SetupRepo $setupRepoArg -SetupDir $setupDirArg -SetupInstallScript $setupInstallScriptArg -WslDistribution $wslDistributionArg -MaxParallelPackageInstalls $MaxParallelPackageInstalls"
+    $commonArgs = "-SetupRepo $setupRepoArg -SetupDir $setupDirArg -SetupInstallScript $setupInstallScriptArg -WslDistribution $wslDistributionArg -MaxParallelPackageInstalls $MaxParallelPackageInstalls -StateDir $stateDirArg"
+
+    if ($SkipWsl) {
+        $commonArgs += " -SkipWsl"
+    }
+
+    if ($ForcePrivateSetup) {
+        $commonArgs += " -ForcePrivateSetup"
+    }
+
+    if ($ResetCheckpoints) {
+        $commonArgs += " -ResetCheckpoints"
+    }
 
     if (-not [string]::IsNullOrWhiteSpace($PSCommandPath) -and (Test-Path $PSCommandPath)) {
         $scriptPathArg = ConvertTo-QuotedPowerShellString $PSCommandPath
@@ -187,11 +261,17 @@ function Test-PackageInstalled {
     )
 
     Write-Step "Checking $($Package.Name)"
+    $checkpointName = "package:$($Package.Id)"
+    $hasCheckpoint = Test-Checkpoint $checkpointName
+    if ($hasCheckpoint) {
+        Write-Info "Checkpoint found for $($Package.Name); verifying it is still installed."
+    }
 
     foreach ($commandName in @($Package.CommandNames)) {
         Write-Heartbeat "Looking for command $commandName."
         if (Test-Command $commandName) {
             Write-Info "$($Package.Name) is already installed."
+            Set-Checkpoint $checkpointName
             return $true
         }
     }
@@ -204,8 +284,13 @@ function Test-PackageInstalled {
         Write-Heartbeat "Looking for $testPath."
         if (Test-Path $testPath) {
             Write-Info "$($Package.Name) is already installed."
+            Set-Checkpoint $checkpointName
             return $true
         }
+    }
+
+    if ($hasCheckpoint) {
+        Write-Info "Checkpoint existed, but $($Package.Name) was not detected. It will be retried."
     }
 
     return $false
@@ -276,6 +361,7 @@ function Invoke-WingetFallbacks {
                 -Reason "retry with hash mismatch bypass"
 
             if ($exitCode -eq 0 -or (Test-PackageInstalled -Package $package)) {
+                Set-Checkpoint "package:$($package.Id)"
                 Write-Info "$($package.Name) retry finished successfully."
                 continue
             }
@@ -336,6 +422,8 @@ function Install-WingetPackages {
                 if ($process.ExitCode -ne 0) {
                     Write-Info "$($record.Name) will be checked for fallback handling."
                     [void]$failedPackages.Add($record.Package)
+                } else {
+                    Set-Checkpoint "package:$($record.Id)"
                 }
 
                 $active.RemoveAt($index)
@@ -359,6 +447,7 @@ function Install-WingetPackages {
     }
 
     Write-Info "Baseline app package installs finished."
+    Set-Checkpoint "phase:packages"
 }
 
 function Get-WslDistros {
@@ -383,15 +472,20 @@ function Install-Wsl {
     if ($SkipWsl) {
         Write-Step "Skipping WSL"
         Write-Info "WSL installation was disabled with -SkipWsl."
+        Set-Checkpoint "phase:wsl-skipped"
         return
     }
 
     Write-Step "Checking WSL"
     Write-Heartbeat "Looking for existing WSL distributions."
+    if (Test-Checkpoint "phase:wsl") {
+        Write-Info "WSL checkpoint found; verifying current WSL state."
+    }
 
     $distros = @(Get-WslDistros)
     if ($distros.Count -gt 0) {
         Write-Info "WSL is already installed: $($distros -join ', ')"
+        Set-Checkpoint "phase:wsl"
         return
     }
 
@@ -425,6 +519,7 @@ function Install-Wsl {
     }
 
     $script:RestartRecommended = $true
+    Set-Checkpoint "phase:wsl-install-requested"
     Write-Info "WSL was installed. A Windows restart may be required before Linux setup can continue."
 }
 
@@ -448,6 +543,16 @@ function Clone-SetupRepo {
         Write-Step "No private setup repo requested"
         Write-Info "Baseline tools are installed. Rerun with -SetupRepo owner/repo when ready."
         return
+    }
+
+    if ((Test-Checkpoint "phase:private-setup") -and (-not $ForcePrivateSetup) -and (Test-Path $SetupDir)) {
+        Write-Step "Private setup already completed"
+        Write-Info "Checkpoint found for private setup. Use -ForcePrivateSetup to run it again."
+        return
+    }
+
+    if ((Test-Checkpoint "phase:private-setup") -and (-not (Test-Path $SetupDir))) {
+        Write-Info "Private setup checkpoint exists, but $SetupDir is missing. The repo will be cloned again."
     }
 
     Ensure-GhAuth
@@ -492,6 +597,7 @@ function Clone-SetupRepo {
         -Arguments @("-ExecutionPolicy", "Bypass", "-File", $installPath) `
         -Description "private setup installer" `
         -HeartbeatSeconds 15 | Out-Null
+    Set-Checkpoint "phase:private-setup"
 }
 
 Assert-Windows
@@ -508,6 +614,8 @@ try {
 if (Request-AdministratorForWsl) {
     return
 }
+
+Initialize-Checkpoints
 
 Write-Step "Checking Windows package manager"
 Assert-Winget
@@ -566,5 +674,6 @@ Refresh-Path
 Clone-SetupRepo
 
 Write-Step "Bootstrap complete"
+Set-Checkpoint "phase:bootstrap"
 Write-Info "Open a new terminal so PATH changes are fully available."
 

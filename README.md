@@ -55,6 +55,17 @@ Increase it only if you are okay with more installer contention:
 $s=irm https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1; & ([scriptblock]::Create($s)) -MaxParallelPackageInstalls 3
 ```
 
+The Windows bootstrap records checkpoints in:
+
+```text
+%LOCALAPPDATA%\public_bootstrap\checkpoints.txt
+```
+
+Rerunning the one-liner resumes from the previous successful work. Installed
+packages are still verified before they are skipped. Reset checkpoints with
+`-ResetCheckpoints`, or rerun the private setup installer with
+`-ForcePrivateSetup`.
+
 Safer version if you want to inspect the script first:
 
 ```powershell
