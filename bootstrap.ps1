@@ -685,7 +685,7 @@ function Invoke-WslLinuxBootstrap {
         return
     }
 
-    Write-Info "Running Linux bootstrap inside WSL distribution: $distro"
+    Write-Info "Running Linux bootstrap inside WSL. Preferred distro from list: $distro"
     Write-Info "If WSL asks you to create a Linux user or enter a sudo password, answer in this terminal."
 
     $linuxBootstrapUrlArg = ConvertTo-QuotedBashString $LinuxBootstrapUrl
@@ -694,12 +694,33 @@ function Invoke-WslLinuxBootstrap {
         'elif command -v wget >/dev/null 2>&1; then wget -qO- "$url" | bash; ' +
         'else sudo apt-get update && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates && curl -fsSL "$url" | bash; fi'
 
-    $bootstrapExitCode = Invoke-ProcessWithHeartbeat `
-        -FilePath "wsl.exe" `
-        -Arguments @("-d", $distro, "--", "bash", "-lc", $bashCommand) `
-        -Description "WSL Linux bootstrap" `
-        -HeartbeatSeconds 20 `
-        -AllowFailure
+    $bootstrapAttempts = @(
+        @{
+            Name = "default WSL distro"
+            Arguments = @("--", "bash", "-lc", $bashCommand)
+        },
+        @{
+            Name = "named WSL distro $distro"
+            Arguments = @("-d", $distro, "--", "bash", "-lc", $bashCommand)
+        }
+    )
+
+    $bootstrapExitCode = $null
+    foreach ($attempt in $bootstrapAttempts) {
+        Write-Info "Trying Linux bootstrap with $($attempt.Name)."
+        $bootstrapExitCode = Invoke-ProcessWithHeartbeat `
+            -FilePath "wsl.exe" `
+            -Arguments $attempt.Arguments `
+            -Description "WSL Linux bootstrap via $($attempt.Name)" `
+            -HeartbeatSeconds 20 `
+            -AllowFailure
+
+        if ($bootstrapExitCode -eq 0) {
+            break
+        }
+
+        Write-Info "WSL Linux bootstrap via $($attempt.Name) did not finish cleanly."
+    }
 
     if ($bootstrapExitCode -eq 0) {
         Set-Checkpoint "phase:wsl-linux-bootstrap"
