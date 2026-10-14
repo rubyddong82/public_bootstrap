@@ -212,24 +212,82 @@ function Test-PackageInstalled {
 }
 
 function Start-WingetPackageProcess {
-    param([hashtable]$Package)
+    param(
+        [hashtable]$Package,
+        [string[]]$ExtraArguments = @()
+    )
 
     Write-Info "Starting $($Package.Name) install."
     Write-Heartbeat "winget may take a few minutes for $($Package.Name)."
 
+    $arguments = @("install", "--id", $Package.Id, "--exact", "--source", "winget", "--accept-package-agreements", "--accept-source-agreements")
+    $arguments += $ExtraArguments
+
     $process = Start-Process `
         -FilePath "winget" `
-        -ArgumentList @("install", "--id", $Package.Id, "--exact", "--source", "winget", "--accept-package-agreements", "--accept-source-agreements") `
+        -ArgumentList $arguments `
         -NoNewWindow `
         -PassThru
 
     return [pscustomobject]@{
         Name = $Package.Name
         Id = $Package.Id
+        Package = $Package
         Process = $process
         StartedAt = Get-Date
         LastHeartbeatAt = Get-Date
     }
+}
+
+function Invoke-WingetPackageInstall {
+    param(
+        [hashtable]$Package,
+        [string[]]$ExtraArguments = @(),
+        [string]$Reason = "install"
+    )
+
+    Write-Info "Starting $($Package.Name) $Reason."
+    $exitCode = Invoke-ProcessWithHeartbeat `
+        -FilePath "winget" `
+        -Arguments (@("install", "--id", $Package.Id, "--exact", "--source", "winget", "--accept-package-agreements", "--accept-source-agreements") + $ExtraArguments) `
+        -Description "winget install $($Package.Name)" `
+        -HeartbeatSeconds 20 `
+        -AllowFailure
+
+    return $exitCode
+}
+
+function Invoke-WingetFallbacks {
+    param([object[]]$FailedPackages)
+
+    $remainingFailures = New-Object System.Collections.ArrayList
+
+    foreach ($package in $FailedPackages) {
+        if (Test-PackageInstalled -Package $package) {
+            continue
+        }
+
+        if ($package.RetryIgnoreSecurityHash) {
+            Write-Step "Retrying $($package.Name)"
+            Write-Info "winget reported a failure. Retrying with --ignore-security-hash for this package only."
+            $exitCode = Invoke-WingetPackageInstall `
+                -Package $package `
+                -ExtraArguments @("--ignore-security-hash") `
+                -Reason "retry with hash mismatch bypass"
+
+            if ($exitCode -eq 0 -or (Test-PackageInstalled -Package $package)) {
+                Write-Info "$($package.Name) retry finished successfully."
+                continue
+            }
+
+            [void]$remainingFailures.Add("$($package.Name) ($($package.Id)) retry exited with $exitCode")
+            continue
+        }
+
+        [void]$remainingFailures.Add("$($package.Name) ($($package.Id)) failed")
+    }
+
+    return $remainingFailures
 }
 
 function Install-WingetPackages {
@@ -252,7 +310,7 @@ function Install-WingetPackages {
 
     $maxParallel = [Math]::Max(1, $MaxParallelPackageInstalls)
     $active = New-Object System.Collections.ArrayList
-    $failures = New-Object System.Collections.ArrayList
+    $failedPackages = New-Object System.Collections.ArrayList
 
     Write-Step "Installing baseline app packages"
     Write-Info "Pending packages: $($pending.Count)"
@@ -276,7 +334,8 @@ function Install-WingetPackages {
                 Write-Info "$($record.Name) install finished with exit code $($process.ExitCode)."
 
                 if ($process.ExitCode -ne 0) {
-                    [void]$failures.Add("$($record.Name) ($($record.Id)) exited with $($process.ExitCode)")
+                    Write-Info "$($record.Name) will be checked for fallback handling."
+                    [void]$failedPackages.Add($record.Package)
                 }
 
                 $active.RemoveAt($index)
@@ -292,8 +351,11 @@ function Install-WingetPackages {
         }
     }
 
-    if ($failures.Count -gt 0) {
-        throw "One or more winget installs failed: $($failures -join '; ')"
+    if ($failedPackages.Count -gt 0) {
+        $remainingFailures = Invoke-WingetFallbacks -FailedPackages $failedPackages.ToArray()
+        if ($remainingFailures.Count -gt 0) {
+            throw "One or more winget installs failed: $($remainingFailures -join '; ')"
+        }
     }
 
     Write-Info "Baseline app package installs finished."
@@ -486,6 +548,7 @@ $baselinePackages = @(
         Name = "Google Chrome"
         CommandNames = @("chrome", "chrome.exe")
         TestPaths = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe")
+        RetryIgnoreSecurityHash = $true
     }
 )
 
