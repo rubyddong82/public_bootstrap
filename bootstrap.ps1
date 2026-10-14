@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$SetupRepo = "",
+    [string]$SetupRepo = "rubyddong82/laptop-setup",
     [string]$SetupDir = "$HOME\laptop-setup",
     [string]$SetupInstallScript = "install.ps1"
 )

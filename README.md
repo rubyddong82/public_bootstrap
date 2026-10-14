@@ -23,16 +23,23 @@ and a normal HTTPS download.
 
 ## Fresh Machine Command
 
-Download first, inspect, then run:
+Minimal one-liner:
+
+```powershell
+irm https://raw.githubusercontent.com/rubyddong82/laptop-bootstrap/main/bootstrap.ps1 | iex
+```
+
+Safer version if you want to inspect the script first:
 
 ```powershell
 iwr https://raw.githubusercontent.com/rubyddong82/laptop-bootstrap/main/bootstrap.ps1 -OutFile "$env:TEMP\bootstrap.ps1"
 notepad "$env:TEMP\bootstrap.ps1"
-powershell -ExecutionPolicy Bypass -File "$env:TEMP\bootstrap.ps1" -SetupRepo "rubyddong82/laptop-setup"
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\bootstrap.ps1"
 ```
 
-The `-SetupRepo` value is optional. If it is not provided, the script only
-installs the baseline tools.
+By default, the script installs baseline tools and then clones
+`rubyddong82/laptop-setup`. You can override that target with `-SetupRepo` if
+needed.
 
 ## Repo Split
 
