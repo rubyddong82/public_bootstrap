@@ -8,7 +8,8 @@ param(
     [switch]$ResetCheckpoints,
     [switch]$NoRebootPrompt,
     [switch]$SkipWslBootstrap,
-    [switch]$SkipWsl
+    [switch]$SkipWsl,
+    [switch]$SkipGitHubSsh
 )
 
 $ErrorActionPreference = "Stop"
@@ -861,6 +862,91 @@ function Install-Wsl {
     Complete-WslInstallRequest "WSL was installed. A Windows restart may be required before Linux setup can continue."
 }
 
+function Initialize-GitHubSsh {
+    if ($SkipGitHubSsh) {
+        Write-Step "Skipping GitHub SSH setup"
+        Write-Info "GitHub SSH setup was disabled with -SkipGitHubSsh."
+        return
+    }
+
+    Write-Step "Setting up GitHub SSH access"
+
+    if (-not (Test-Command "gh")) {
+        Write-Info "GitHub CLI (gh) was not found; skipping SSH setup. Open a new terminal and rerun."
+        return
+    }
+    if (-not (Test-Command "ssh-keygen")) {
+        Write-Info "ssh-keygen was not found; enable the Windows OpenSSH Client feature and rerun."
+        return
+    }
+
+    try {
+        $sshDir = Join-Path $env:USERPROFILE ".ssh"
+        $keyPath = Join-Path $sshDir "id_ed25519"
+        $pubPath = "$keyPath.pub"
+
+        if (-not (Test-Path $sshDir)) {
+            New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+        }
+
+        if (-not (Test-Path $keyPath)) {
+            Write-Info "Generating ed25519 key. Enter a passphrase when prompted (empty for none)."
+            & ssh-keygen -t ed25519 -C "$env:USERNAME@$env:COMPUTERNAME" -f $keyPath
+            if ($LASTEXITCODE -ne 0) { throw "ssh-keygen failed with exit code $LASTEXITCODE." }
+        } else {
+            Write-Info "SSH key already exists: $keyPath"
+        }
+
+        # Fast path: key exists and GitHub already accepts it.
+        $sshOutput = (& ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1) -join " "
+        if ($sshOutput -match "successfully authenticated") {
+            Write-Info "GitHub SSH already works; nothing to do."
+            Set-Checkpoint "phase:github-ssh"
+            return
+        }
+
+        $authStatus = (& gh auth status -h github.com 2>&1) -join "`n"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Info "Starting GitHub login (browser/device flow)."
+            & gh auth login -h github.com -p ssh -s admin:public_key -w
+            if ($LASTEXITCODE -ne 0) { throw "gh auth login failed." }
+        } elseif ($authStatus -notmatch "admin:public_key") {
+            Write-Info "GitHub CLI is authenticated but lacks key-upload scope; refreshing."
+            & gh auth refresh -h github.com -s admin:public_key
+            if ($LASTEXITCODE -ne 0) { throw "gh auth refresh failed." }
+        } else {
+            Write-Info "GitHub CLI is already authenticated with key-upload scope."
+        }
+
+        $localKey = ((Get-Content $pubPath -Raw).Trim() -split "\s+")[1]
+        $registered = (& gh ssh-key list 2>$null) -join "`n"
+        if ($registered -and $registered.Contains($localKey)) {
+            Write-Info "This SSH key is already registered on GitHub."
+        } else {
+            & gh ssh-key add $pubPath --title "$env:COMPUTERNAME"
+            if ($LASTEXITCODE -ne 0) { throw "gh ssh-key add failed." }
+            Write-Info "SSH key added to GitHub as '$env:COMPUTERNAME'."
+        }
+
+        $knownHosts = Join-Path $sshDir "known_hosts"
+        if (-not ((Test-Path $knownHosts) -and (Select-String -Path $knownHosts -Pattern "^github\.com" -Quiet))) {
+            & ssh-keyscan -t ed25519,rsa github.com 2>$null | Add-Content -Path $knownHosts -Encoding ASCII
+        }
+
+        $sshOutput = (& ssh -o BatchMode=yes -T git@github.com 2>&1) -join " "
+        if ($sshOutput -match "successfully authenticated") {
+            Write-Info "GitHub SSH test passed."
+            Set-Checkpoint "phase:github-ssh"
+        } else {
+            Write-Info "GitHub SSH test did not confirm authentication: $sshOutput"
+            Write-Info "If the key has a passphrase, load it with ssh-add and run: ssh -T git@github.com"
+        }
+    } catch {
+        Write-Info "GitHub SSH setup did not finish: $($_.Exception.Message)"
+        Write-Info "Rerun the bootstrap or run 'gh auth login' and 'gh ssh-key add' manually."
+    }
+}
+
 Save-BootstrapOneLiner
 
 Assert-Windows
@@ -887,6 +973,12 @@ $baselinePackages = @(
         Name = "Git"
         CommandNames = @("git")
         TestPaths = @()
+    },
+    @{
+        Id = "GitHub.cli"
+        Name = "GitHub CLI"
+        CommandNames = @("gh")
+        TestPaths = @("$env:ProgramFiles\GitHub CLI\gh.exe")
     },
     @{
         Id = "Microsoft.PowerShell"
@@ -934,6 +1026,7 @@ if ($script:RestartRecommended) {
 }
 
 Refresh-Path
+Initialize-GitHubSsh
 Invoke-WslLinuxBootstrap
 
 Write-Step "Windows bootstrap complete"
