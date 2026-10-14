@@ -7,8 +7,11 @@ param(
     [string]$BootstrapUrl = "https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1",
     [int]$MaxParallelPackageInstalls = 2,
     [string]$StateDir = "",
+    [string]$TimeZoneId = "Korea Standard Time",
+    [string]$TimePeer = "time.windows.com,0x9",
     [switch]$ForcePrivateSetup,
     [switch]$ResetCheckpoints,
+    [switch]$SkipTimeSync,
     [switch]$SkipWsl
 )
 
@@ -37,6 +40,21 @@ function Write-Heartbeat {
     Write-Host "    [$((Get-Timestamp))] ... $Message" -ForegroundColor DarkGray
 }
 
+function ConvertTo-ProcessArgumentList {
+    param([string[]]$Arguments)
+
+    $convertedArguments = foreach ($rawArgument in $Arguments) {
+        $argument = [string]$rawArgument
+        if ($argument -match '[\s"]') {
+            '"' + ($argument -replace '"', '\"') + '"'
+        } else {
+            $argument
+        }
+    }
+
+    return ($convertedArguments -join " ")
+}
+
 function Invoke-ProcessWithHeartbeat {
     param(
         [string]$FilePath,
@@ -48,7 +66,8 @@ function Invoke-ProcessWithHeartbeat {
     )
 
     Write-Heartbeat "Starting $Description."
-    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -NoNewWindow -PassThru
+    $argumentList = ConvertTo-ProcessArgumentList $Arguments
+    $process = Start-Process -FilePath $FilePath -ArgumentList $argumentList -NoNewWindow -PassThru
     $startedAt = Get-Date
 
     while (-not $process.HasExited) {
@@ -159,11 +178,17 @@ function New-BootstrapCommand {
     $setupInstallScriptArg = ConvertTo-QuotedPowerShellString $SetupInstallScript
     $wslDistributionArg = ConvertTo-QuotedPowerShellString $WslDistribution
     $stateDirArg = ConvertTo-QuotedPowerShellString (Resolve-StateDir)
+    $timeZoneIdArg = ConvertTo-QuotedPowerShellString $TimeZoneId
+    $timePeerArg = ConvertTo-QuotedPowerShellString $TimePeer
 
-    $commonArgs = "-SetupRepo $setupRepoArg -SetupDir $setupDirArg -SetupInstallScript $setupInstallScriptArg -WslDistribution $wslDistributionArg -MaxParallelPackageInstalls $MaxParallelPackageInstalls -StateDir $stateDirArg"
+    $commonArgs = "-SetupRepo $setupRepoArg -SetupDir $setupDirArg -SetupInstallScript $setupInstallScriptArg -WslDistribution $wslDistributionArg -MaxParallelPackageInstalls $MaxParallelPackageInstalls -StateDir $stateDirArg -TimeZoneId $timeZoneIdArg -TimePeer $timePeerArg"
 
     if ($SkipWsl) {
         $commonArgs += " -SkipWsl"
+    }
+
+    if ($SkipTimeSync) {
+        $commonArgs += " -SkipTimeSync"
     }
 
     if ($ForcePrivateSetup) {
@@ -217,7 +242,7 @@ function Start-ElevatedBootstrap {
     }
 }
 
-function Request-AdministratorForWsl {
+function Test-WslInstallNeedsAdministrator {
     if ($SkipWsl) {
         return $false
     }
@@ -227,13 +252,91 @@ function Request-AdministratorForWsl {
         return $false
     }
 
+    return $true
+}
+
+function Request-AdministratorForBootstrap {
     if (Test-IsAdministrator) {
         return $false
     }
 
-    Start-ElevatedBootstrap
-    Write-Info "This non-elevated run will stop now. Continue in the elevated window."
-    return $true
+    if ((-not $SkipTimeSync) -or (Test-WslInstallNeedsAdministrator)) {
+        Start-ElevatedBootstrap
+        Write-Info "This non-elevated run will stop now. Continue in the elevated window."
+        return $true
+    }
+
+    return $false
+}
+
+function Repair-WindowsTime {
+    if ($SkipTimeSync) {
+        Write-Step "Skipping Windows time sync"
+        Write-Info "Time repair was disabled with -SkipTimeSync."
+        return
+    }
+
+    Write-Step "Checking Windows time"
+
+    if (-not [string]::IsNullOrWhiteSpace($TimeZoneId)) {
+        Write-Info "Setting Windows time zone to $TimeZoneId."
+        $timeZoneExitCode = Invoke-ProcessWithHeartbeat `
+            -FilePath "tzutil.exe" `
+            -Arguments @("/s", $TimeZoneId) `
+            -Description "set Windows time zone" `
+            -HeartbeatSeconds 5 `
+            -AllowFailure
+
+        if ($timeZoneExitCode -ne 0) {
+            Write-Info "Could not set time zone automatically. Continuing with clock sync."
+        }
+    }
+
+    Write-Info "Ensuring Windows Time service is automatic and running."
+    try {
+        Set-Service -Name "w32time" -StartupType Automatic
+        Start-Service -Name "w32time" -ErrorAction SilentlyContinue
+    } catch {
+        Write-Info "Could not fully start/configure w32time service: $($_.Exception.Message)"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($TimePeer)) {
+        Write-Info "Configuring Windows Time peer: $TimePeer"
+        Invoke-ProcessWithHeartbeat `
+            -FilePath "w32tm.exe" `
+            -Arguments @("/config", "/syncfromflags:manual", "/manualpeerlist:$TimePeer", "/update") `
+            -Description "configure Windows Time peer" `
+            -HeartbeatSeconds 5 `
+            -AllowFailure | Out-Null
+    }
+
+    Write-Info "Restarting Windows Time service."
+    try {
+        Restart-Service -Name "w32time" -Force -ErrorAction Stop
+    } catch {
+        Write-Info "Could not restart w32time service: $($_.Exception.Message)"
+    }
+
+    Write-Info "Forcing a Windows clock resync."
+    $resyncExitCode = Invoke-ProcessWithHeartbeat `
+        -FilePath "w32tm.exe" `
+        -Arguments @("/resync", "/force") `
+        -Description "Windows clock resync" `
+        -HeartbeatSeconds 5 `
+        -AllowFailure
+
+    if ($resyncExitCode -ne 0) {
+        Write-Info "Clock resync did not report success. Windows may need a minute online before retrying."
+    }
+
+    Invoke-ProcessWithHeartbeat `
+        -FilePath "w32tm.exe" `
+        -Arguments @("/query", "/status") `
+        -Description "Windows Time status query" `
+        -HeartbeatSeconds 5 `
+        -AllowFailure | Out-Null
+
+    Write-Info "Windows time check finished."
 }
 
 function Assert-Winget {
@@ -307,10 +410,11 @@ function Start-WingetPackageProcess {
 
     $arguments = @("install", "--id", $Package.Id, "--exact", "--source", "winget", "--accept-package-agreements", "--accept-source-agreements")
     $arguments += $ExtraArguments
+    $argumentList = ConvertTo-ProcessArgumentList $arguments
 
     $process = Start-Process `
         -FilePath "winget" `
-        -ArgumentList $arguments `
+        -ArgumentList $argumentList `
         -NoNewWindow `
         -PassThru
 
@@ -342,6 +446,58 @@ function Invoke-WingetPackageInstall {
     return $exitCode
 }
 
+function Install-GoogleChromeDirect {
+    param([hashtable]$Package)
+
+    Write-Step "Installing Google Chrome directly"
+    Write-Info "winget could not install Chrome cleanly. Downloading Google's standalone MSI instead."
+
+    $downloadDir = Join-Path ([System.IO.Path]::GetTempPath()) "public_bootstrap"
+    if (-not (Test-Path $downloadDir)) {
+        New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+    }
+
+    $installerPath = Join-Path $downloadDir "googlechromestandaloneenterprise64.msi"
+    $installerUrl = "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi"
+
+    if (Test-Path $installerPath) {
+        Remove-Item $installerPath -Force
+    }
+
+    if (Test-Command "curl.exe") {
+        Invoke-ProcessWithHeartbeat `
+            -FilePath "curl.exe" `
+            -Arguments @("-L", "--fail", "--retry", "3", "--connect-timeout", "20", "--output", $installerPath, $installerUrl) `
+            -Description "Google Chrome direct download" `
+            -HeartbeatSeconds 10 | Out-Null
+    } else {
+        Write-Heartbeat "curl.exe was not found; using PowerShell download."
+        Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing
+    }
+
+    if (-not (Test-Path $installerPath)) {
+        Write-Info "Chrome direct installer was not downloaded."
+        return $false
+    }
+
+    $installExitCode = Invoke-ProcessWithHeartbeat `
+        -FilePath "msiexec.exe" `
+        -Arguments @("/i", $installerPath, "/qn", "/norestart") `
+        -Description "Google Chrome direct MSI install" `
+        -SuccessExitCodes @(0, 3010) `
+        -HeartbeatSeconds 20 `
+        -AllowFailure
+
+    if (($installExitCode -in @(0, 3010)) -or (Test-PackageInstalled -Package $Package)) {
+        Set-Checkpoint "package:$($Package.Id)"
+        Write-Info "Google Chrome direct install finished successfully."
+        return $true
+    }
+
+    Write-Info "Google Chrome direct installer exited with $installExitCode."
+    return $false
+}
+
 function Invoke-WingetFallbacks {
     param([object[]]$FailedPackages)
 
@@ -366,7 +522,25 @@ function Invoke-WingetFallbacks {
                 continue
             }
 
+            if ($package.DirectChromeFallback -and (Install-GoogleChromeDirect -Package $package)) {
+                continue
+            }
+
+            if ($package.Optional) {
+                Write-Info "$($package.Name) is optional. Continuing after retry failure."
+                continue
+            }
+
             [void]$remainingFailures.Add("$($package.Name) ($($package.Id)) retry exited with $exitCode")
+            continue
+        }
+
+        if ($package.DirectChromeFallback -and (Install-GoogleChromeDirect -Package $package)) {
+            continue
+        }
+
+        if ($package.Optional) {
+            Write-Info "$($package.Name) is optional. Continuing after install failure."
             continue
         }
 
@@ -611,11 +785,12 @@ try {
     Write-Info "Could not force TLS 1.2; continuing with system defaults."
 }
 
-if (Request-AdministratorForWsl) {
+if (Request-AdministratorForBootstrap) {
     return
 }
 
 Initialize-Checkpoints
+Repair-WindowsTime
 
 Write-Step "Checking Windows package manager"
 Assert-Winget
@@ -657,6 +832,8 @@ $baselinePackages = @(
         CommandNames = @("chrome", "chrome.exe")
         TestPaths = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe")
         RetryIgnoreSecurityHash = $true
+        DirectChromeFallback = $true
+        Optional = $true
     }
 )
 

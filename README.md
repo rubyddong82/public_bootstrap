@@ -13,6 +13,7 @@ ship with the operating system and a normal HTTPS download.
 3. Download this repo's `bootstrap.ps1` from `raw.githubusercontent.com`.
 4. Run the script.
 5. Let the script install baseline tools:
+   - Windows time sync and timezone setup
    - Git
    - GitHub CLI
    - PowerShell 7
@@ -45,6 +46,22 @@ script asks for one, restart Windows and run the same one-liner again.
 
 If you forget to start PowerShell as Administrator, the script will open a UAC
 prompt and continue in a new elevated PowerShell window.
+
+The script repairs Windows time near the start because a bad clock can break
+TLS downloads, package manager checks, and GitHub login. It defaults to:
+
+```text
+timezone: Korea Standard Time
+time peer: time.windows.com,0x9
+```
+
+Override the timezone if needed:
+
+```powershell
+$s=irm https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1; & ([scriptblock]::Create($s)) -TimeZoneId "Pacific Standard Time"
+```
+
+Skip the time repair with `-SkipTimeSync`.
 
 The script prints timestamped progress messages around slow installs so it is
 easier to tell when `winget`, WSL, or GitHub authentication is still working.
@@ -81,6 +98,11 @@ if needed.
 WSL installs Ubuntu by default. You can override the distro with
 `-WslDistribution` or skip WSL with `-SkipWsl` when using the safer downloaded
 script version.
+
+Google Chrome is installed by default. If `winget` hits a temporary hash or
+manifest problem, the script retries and then falls back to Google's direct MSI
+installer. Chrome is treated as optional so it will not block WSL or the private
+bootstrap if every Chrome install path fails.
 
 ## Linux Flow
 
