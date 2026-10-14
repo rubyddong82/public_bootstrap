@@ -31,6 +31,38 @@ function Write-Heartbeat {
     Write-Host "    [$((Get-Timestamp))] ... $Message" -ForegroundColor DarkGray
 }
 
+function Invoke-ProcessWithHeartbeat {
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments,
+        [string]$Description,
+        [int[]]$SuccessExitCodes = @(0),
+        [int]$HeartbeatSeconds = 15,
+        [switch]$AllowFailure
+    )
+
+    Write-Heartbeat "Starting $Description."
+    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -NoNewWindow -PassThru
+    $startedAt = Get-Date
+
+    while (-not $process.HasExited) {
+        Start-Sleep -Seconds $HeartbeatSeconds
+        if (-not $process.HasExited) {
+            $elapsed = [int]((Get-Date) - $startedAt).TotalSeconds
+            Write-Heartbeat "$Description still running after $elapsed seconds."
+        }
+    }
+
+    $process.WaitForExit()
+    Write-Info "$Description finished with exit code $($process.ExitCode)."
+
+    if (($SuccessExitCodes -notcontains $process.ExitCode) -and (-not $AllowFailure)) {
+        throw "$Description failed with exit code $($process.ExitCode)."
+    }
+
+    return $process.ExitCode
+}
+
 function Test-Command {
     param([string]$Name)
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
@@ -84,7 +116,7 @@ Write-Host '==> Elevated bootstrap resumed' -ForegroundColor Cyan
 Write-Host ''
 Write-Host '==> Elevated bootstrap resumed' -ForegroundColor Cyan
 Write-Host '    Downloading latest bootstrap script...'
-`$bootstrap = irm $bootstrapUrlArg
+`$bootstrap = irm -TimeoutSec 120 $bootstrapUrlArg
 & ([scriptblock]::Create(`$bootstrap)) $commonArgs
 "@
 }
@@ -151,26 +183,40 @@ function Assert-Winget {
 function Install-WingetPackage {
     param(
         [string]$Id,
-        [string]$Name
+        [string]$Name,
+        [string[]]$CommandNames = @(),
+        [string[]]$TestPaths = @()
     )
 
     Write-Step "Checking $Name"
-    Write-Heartbeat "Querying winget for $Id."
 
-    $listOutput = winget list --id $Id --exact --accept-source-agreements 2>$null
-    if ($LASTEXITCODE -eq 0 -and ($listOutput -match [regex]::Escape($Id))) {
-        Write-Info "$Name is already installed."
-        return
+    foreach ($commandName in $CommandNames) {
+        Write-Heartbeat "Looking for command $commandName."
+        if (Test-Command $commandName) {
+            Write-Info "$Name is already installed."
+            return
+        }
+    }
+
+    foreach ($testPath in $TestPaths) {
+        if ([string]::IsNullOrWhiteSpace($testPath)) {
+            continue
+        }
+
+        Write-Heartbeat "Looking for $testPath."
+        if (Test-Path $testPath) {
+            Write-Info "$Name is already installed."
+            return
+        }
     }
 
     Write-Info "Installing $Name..."
     Write-Heartbeat "winget may take a few minutes for $Name."
-    winget install --id $Id --exact --source winget --accept-package-agreements --accept-source-agreements
-    if ($LASTEXITCODE -ne 0) {
-        throw "winget failed while installing $Name."
-    }
-
-    Write-Info "$Name install command finished."
+    Invoke-ProcessWithHeartbeat `
+        -FilePath "winget" `
+        -Arguments @("install", "--id", $Id, "--exact", "--source", "winget", "--accept-package-agreements", "--accept-source-agreements") `
+        -Description "winget install $Name" `
+        -HeartbeatSeconds 20 | Out-Null
 }
 
 function Get-WslDistros {
@@ -213,14 +259,23 @@ function Install-Wsl {
 
     Write-Info "Installing WSL with $WslDistribution."
     Write-Heartbeat "This can take several minutes and may appear quiet."
-    wsl.exe --install -d $WslDistribution --no-launch
-    $installExitCode = $LASTEXITCODE
+    $installExitCode = Invoke-ProcessWithHeartbeat `
+        -FilePath "wsl.exe" `
+        -Arguments @("--install", "-d", $WslDistribution, "--no-launch") `
+        -Description "WSL install for $WslDistribution" `
+        -SuccessExitCodes @(0, 3010) `
+        -HeartbeatSeconds 20 `
+        -AllowFailure
 
     if ($installExitCode -notin @(0, 3010)) {
         Write-Info "Retrying WSL install with web download."
         Write-Heartbeat "Downloading WSL package directly from Microsoft."
-        wsl.exe --install --web-download -d $WslDistribution --no-launch
-        $installExitCode = $LASTEXITCODE
+        $installExitCode = Invoke-ProcessWithHeartbeat `
+            -FilePath "wsl.exe" `
+            -Arguments @("--install", "--web-download", "-d", $WslDistribution, "--no-launch") `
+            -Description "WSL web-download install for $WslDistribution" `
+            -SuccessExitCodes @(0, 3010) `
+            -HeartbeatSeconds 20
     }
 
     if ($installExitCode -notin @(0, 3010)) {
@@ -262,14 +317,22 @@ function Clone-SetupRepo {
         Write-Heartbeat "Running git pull --ff-only."
         Push-Location $SetupDir
         try {
-            git pull --ff-only
+            Invoke-ProcessWithHeartbeat `
+                -FilePath "git" `
+                -Arguments @("pull", "--ff-only") `
+                -Description "git pull for private bootstrap" `
+                -HeartbeatSeconds 15 | Out-Null
         } finally {
             Pop-Location
         }
     } else {
         Write-Info "Cloning into $SetupDir."
         Write-Heartbeat "Running gh repo clone."
-        gh repo clone $SetupRepo $SetupDir
+        Invoke-ProcessWithHeartbeat `
+            -FilePath "gh" `
+            -Arguments @("repo", "clone", $SetupRepo, $SetupDir) `
+            -Description "gh repo clone $SetupRepo" `
+            -HeartbeatSeconds 15 | Out-Null
     }
 
     $installPath = Join-Path $SetupDir $SetupInstallScript
@@ -282,7 +345,11 @@ function Clone-SetupRepo {
 
     Write-Step "Running private setup installer"
     Write-Heartbeat "Handing off to $installPath."
-    powershell -ExecutionPolicy Bypass -File $installPath
+    Invoke-ProcessWithHeartbeat `
+        -FilePath "powershell" `
+        -Arguments @("-ExecutionPolicy", "Bypass", "-File", $installPath) `
+        -Description "private setup installer" `
+        -HeartbeatSeconds 15 | Out-Null
 }
 
 Assert-Windows
@@ -303,12 +370,16 @@ if (Request-AdministratorForWsl) {
 Write-Step "Checking Windows package manager"
 Assert-Winget
 
-Install-WingetPackage -Id "Git.Git" -Name "Git"
-Install-WingetPackage -Id "GitHub.cli" -Name "GitHub CLI"
-Install-WingetPackage -Id "Microsoft.PowerShell" -Name "PowerShell 7"
-Install-WingetPackage -Id "Microsoft.WindowsTerminal" -Name "Windows Terminal"
-Install-WingetPackage -Id "Microsoft.VisualStudioCode" -Name "Visual Studio Code"
-Install-WingetPackage -Id "Google.Chrome" -Name "Google Chrome"
+Install-WingetPackage -Id "Git.Git" -Name "Git" -CommandNames @("git")
+Install-WingetPackage -Id "GitHub.cli" -Name "GitHub CLI" -CommandNames @("gh")
+Install-WingetPackage -Id "Microsoft.PowerShell" -Name "PowerShell 7" -CommandNames @("pwsh")
+Install-WingetPackage -Id "Microsoft.WindowsTerminal" -Name "Windows Terminal" -CommandNames @("wt")
+Install-WingetPackage -Id "Microsoft.VisualStudioCode" -Name "Visual Studio Code" -CommandNames @("code")
+Install-WingetPackage `
+    -Id "Google.Chrome" `
+    -Name "Google Chrome" `
+    -CommandNames @("chrome", "chrome.exe") `
+    -TestPaths @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe")
 
 Install-Wsl
 

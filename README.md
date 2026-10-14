@@ -34,6 +34,12 @@ Minimal one-liner:
 irm https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1 | iex
 ```
 
+Verbose one-liner:
+
+```powershell
+$u="https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1"; Write-Host "Downloading bootstrap..."; $s=irm -TimeoutSec 120 $u; Write-Host "Running bootstrap..."; iex $s
+```
+
 Run this from PowerShell as Administrator. WSL may require a reboot; if the
 script asks for one, restart Windows and run the same one-liner again.
 
