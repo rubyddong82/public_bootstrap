@@ -677,8 +677,7 @@ function Invoke-WslLinuxBootstrap {
     Write-Step "Checking WSL Linux bootstrap"
 
     if (Test-Checkpoint "phase:wsl-linux-bootstrap") {
-        Write-Info "WSL Linux bootstrap checkpoint found. Use -ResetCheckpoints to run it again from Windows."
-        return
+        Write-Info "WSL Linux bootstrap succeeded before; rerunning it (it skips work that is already done)."
     }
 
     if (-not (Test-Command "wsl.exe")) {

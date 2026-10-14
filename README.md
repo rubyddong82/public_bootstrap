@@ -70,7 +70,9 @@ The Windows bootstrap records checkpoints in:
 ```
 
 Rerunning the one-liner resumes from the previous successful work. Installed
-packages are still verified before they are skipped. Reset checkpoints with
+packages are still verified before they are skipped. The WSL Linux bootstrap
+always reruns; it is idempotent and handles GitHub login and the WSL SSH key. The WSL Linux bootstrap
+always reruns (it is idempotent, and handles GitHub login and the WSL SSH key). Reset checkpoints with
 `-ResetCheckpoints`.
 
 Disable the interactive restart prompt with `-NoRebootPrompt`.
