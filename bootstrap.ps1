@@ -103,15 +103,16 @@ function Get-WslDistros {
         return @()
     }
 
-    $distros = @(wsl.exe --list --quiet 2>$null)
+    $commandShell = if ([string]::IsNullOrWhiteSpace($env:ComSpec)) { "cmd.exe" } else { $env:ComSpec }
+    $distros = @(& $commandShell /d /c "wsl.exe --list --quiet 2>NUL")
     if ($LASTEXITCODE -ne 0) {
         return @()
     }
 
     return @(
         $distros |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-            ForEach-Object { $_.Trim().Trim([char]0xfeff) }
+            ForEach-Object { ([string]$_).Trim().Trim([char]0xfeff).Trim([char]0) } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     )
 }
 
