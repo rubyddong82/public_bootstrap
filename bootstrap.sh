@@ -4,6 +4,7 @@ set -Eeuo pipefail
 SETUP_REPO="${SETUP_REPO:-rubyddong82/private_bootstrap}"
 SETUP_DIR="${SETUP_DIR:-$HOME/private_bootstrap}"
 SETUP_INSTALL_SCRIPT="${SETUP_INSTALL_SCRIPT:-install.sh}"
+GITHUB_SSH_OK=0
 INSTALL_DESKTOP_APPS="${INSTALL_DESKTOP_APPS:-auto}"
 
 log_step() {
@@ -344,7 +345,7 @@ ensure_gh_auth() {
     fi
 
     log_info "Starting GitHub login."
-    gh auth login -h github.com -p ssh -s admin:public_key --skip-ssh-key
+    gh auth login --web --hostname github.com --git-protocol ssh --scopes admin:public_key --skip-ssh-key
 }
 
 ensure_github_ssh() {
@@ -390,12 +391,13 @@ ensure_github_ssh() {
     ssh_out="$(github_ssh_test)"
     if printf '%s' "$ssh_out" | grep -q "successfully authenticated"; then
         log_info "GitHub already accepts the WSL key; nothing to do."
+        GITHUB_SSH_OK=1
         return 0
     fi
     log_info "GitHub does not accept the WSL key yet; registering it."
 
     if ! gh auth status -h github.com >/dev/null 2>&1; then
-        gh auth login -h github.com -p ssh -s admin:public_key --skip-ssh-key || { log_info "gh auth login failed; skipping SSH setup."; return 0; }
+        gh auth login --web --hostname github.com --git-protocol ssh --scopes admin:public_key --skip-ssh-key || { log_info "gh auth login failed; skipping SSH setup."; return 0; }
     elif ! gh auth status -h github.com 2>&1 | grep -q "admin:public_key"; then
         log_info "Refreshing GitHub CLI scope for key upload."
         gh auth refresh -h github.com -s admin:public_key || { log_info "gh auth refresh failed; skipping SSH setup."; return 0; }
@@ -413,6 +415,7 @@ ensure_github_ssh() {
     ssh_out="$(github_ssh_test)"
     if printf '%s' "$ssh_out" | grep -q "successfully authenticated"; then
         log_info "GitHub SSH test passed with the WSL key."
+        GITHUB_SSH_OK=1
     else
         log_info "GitHub SSH test did not confirm authentication: $ssh_out"
         log_info "If the key has a passphrase, load it with ssh-add and run: ssh -T git@github.com"
@@ -425,9 +428,26 @@ clone_setup_repo() {
 
     log_step "Preparing setup repo $SETUP_REPO"
 
+    if [ "$GITHUB_SSH_OK" = 1 ]; then
+        gh config set git_protocol ssh -h github.com >/dev/null 2>&1 || true
+    else
+        # No working SSH key: let git use the gh token instead of prompting for a password.
+        gh auth setup-git >/dev/null 2>&1 || true
+    fi
+
     if [ -d "$SETUP_DIR/.git" ]; then
+        local origin_url
+        origin_url="$(git -C "$SETUP_DIR" remote get-url origin 2>/dev/null || true)"
+        if [ "$GITHUB_SSH_OK" = 1 ]; then
+            case "$origin_url" in
+                https://github.com/*)
+                    log_info "Switching origin from HTTPS to SSH."
+                    git -C "$SETUP_DIR" remote set-url origin "git@github.com:${origin_url#https://github.com/}"
+                    ;;
+            esac
+        fi
         log_info "$SETUP_DIR already exists. Pulling latest changes."
-        git -C "$SETUP_DIR" pull --ff-only
+        GIT_TERMINAL_PROMPT=0 git -C "$SETUP_DIR" pull --ff-only
     elif [ -e "$SETUP_DIR" ]; then
         die "$SETUP_DIR exists but is not a git repository."
     else
