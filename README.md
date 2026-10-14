@@ -22,7 +22,7 @@ operating system and a normal HTTPS download.
    - WSL with Ubuntu
 6. Restart Windows if WSL asks for it.
 7. Rerun the same one-liner after reboot.
-8. Open WSL and run the Linux bootstrap for GitHub CLI and private setup.
+8. Let the script run the Linux bootstrap inside WSL for GitHub CLI and private setup.
 
 ## Windows Command
 
@@ -74,6 +74,7 @@ packages are still verified before they are skipped. Reset checkpoints with
 `-ResetCheckpoints`.
 
 Disable the interactive restart prompt with `-NoRebootPrompt`.
+Skip the automatic Linux/WSL bootstrap handoff with `-SkipWslBootstrap`.
 
 Safer version if you want to inspect the script first:
 
@@ -83,12 +84,16 @@ notepad "$env:TEMP\bootstrap.ps1"
 powershell -ExecutionPolicy Bypass -File "$env:TEMP\bootstrap.ps1"
 ```
 
-By default, the Windows script installs baseline tools and WSL only. GitHub CLI
-and `rubyddong82/private_bootstrap` are handled from the Linux/WSL bootstrap.
+By default, the Windows script installs baseline tools and WSL, then runs the
+Linux bootstrap inside WSL. That Linux bootstrap installs GitHub CLI and handles
+`rubyddong82/private_bootstrap`.
 
 WSL installs Ubuntu by default. You can override the distro with
 `-WslDistribution` or skip WSL with `-SkipWsl` when using the safer downloaded
 script version.
+
+On the first WSL run, Ubuntu may ask you to create a Linux user. The Linux
+bootstrap may also ask for a sudo password or `gh auth login`.
 
 Google Chrome is installed by default. If `winget` hits a temporary hash or
 manifest problem, the script retries and then falls back to Google's direct MSI

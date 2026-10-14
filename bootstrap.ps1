@@ -2,10 +2,12 @@
 param(
     [string]$WslDistribution = "Ubuntu",
     [string]$BootstrapUrl = "https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.ps1",
+    [string]$LinuxBootstrapUrl = "https://raw.githubusercontent.com/rubyddong82/public_bootstrap/main/bootstrap.sh",
     [int]$MaxParallelPackageInstalls = 2,
     [string]$StateDir = "",
     [switch]$ResetCheckpoints,
     [switch]$NoRebootPrompt,
+    [switch]$SkipWslBootstrap,
     [switch]$SkipWsl
 )
 
@@ -216,11 +218,17 @@ function ConvertTo-QuotedPowerShellString {
     return "'" + ($Value -replace "'", "''") + "'"
 }
 
+function ConvertTo-QuotedBashString {
+    param([string]$Value)
+    return "'" + ($Value -replace "'", "'\''") + "'"
+}
+
 function New-BootstrapCommand {
     $wslDistributionArg = ConvertTo-QuotedPowerShellString $WslDistribution
+    $linuxBootstrapUrlArg = ConvertTo-QuotedPowerShellString $LinuxBootstrapUrl
     $stateDirArg = ConvertTo-QuotedPowerShellString (Resolve-StateDir)
 
-    $commonArgs = "-WslDistribution $wslDistributionArg -MaxParallelPackageInstalls $MaxParallelPackageInstalls -StateDir $stateDirArg"
+    $commonArgs = "-WslDistribution $wslDistributionArg -LinuxBootstrapUrl $linuxBootstrapUrlArg -MaxParallelPackageInstalls $MaxParallelPackageInstalls -StateDir $stateDirArg"
 
     if ($SkipWsl) {
         $commonArgs += " -SkipWsl"
@@ -228,6 +236,10 @@ function New-BootstrapCommand {
 
     if ($NoRebootPrompt) {
         $commonArgs += " -NoRebootPrompt"
+    }
+
+    if ($SkipWslBootstrap) {
+        $commonArgs += " -SkipWslBootstrap"
     }
 
     if ($ResetCheckpoints) {
@@ -629,6 +641,75 @@ function Complete-WslInstallRequest {
     Write-Info $Message
 }
 
+function Get-PreferredWslDistribution {
+    $distros = @(Get-WslDistros)
+    if ($distros.Count -eq 0) {
+        return ""
+    }
+
+    foreach ($distro in $distros) {
+        if ($distro -ieq $WslDistribution) {
+            return $distro
+        }
+    }
+
+    return $distros[0]
+}
+
+function Invoke-WslLinuxBootstrap {
+    if ($SkipWsl) {
+        return
+    }
+
+    if ($SkipWslBootstrap) {
+        Write-Step "Skipping WSL Linux bootstrap"
+        Write-Info "WSL Linux bootstrap was disabled with -SkipWslBootstrap."
+        return
+    }
+
+    Write-Step "Checking WSL Linux bootstrap"
+
+    if (Test-Checkpoint "phase:wsl-linux-bootstrap") {
+        Write-Info "WSL Linux bootstrap checkpoint found. Use -ResetCheckpoints to run it again from Windows."
+        return
+    }
+
+    if (-not (Test-Command "wsl.exe")) {
+        Write-Info "wsl.exe was not found. Skipping WSL Linux bootstrap."
+        return
+    }
+
+    $distro = Get-PreferredWslDistribution
+    if ([string]::IsNullOrWhiteSpace($distro)) {
+        Write-Info "No WSL distribution was found yet. Rerun after WSL finishes installing."
+        return
+    }
+
+    Write-Info "Running Linux bootstrap inside WSL distribution: $distro"
+    Write-Info "If WSL asks you to create a Linux user or enter a sudo password, answer in this terminal."
+
+    $linuxBootstrapUrlArg = ConvertTo-QuotedBashString $LinuxBootstrapUrl
+    $bashCommand = "set -Eeuo pipefail; url=$linuxBootstrapUrlArg; " +
+        'if command -v curl >/dev/null 2>&1; then curl -fsSL "$url" | bash; ' +
+        'elif command -v wget >/dev/null 2>&1; then wget -qO- "$url" | bash; ' +
+        'else sudo apt-get update && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates && curl -fsSL "$url" | bash; fi'
+
+    $bootstrapExitCode = Invoke-ProcessWithHeartbeat `
+        -FilePath "wsl.exe" `
+        -Arguments @("-d", $distro, "--", "bash", "-lc", $bashCommand) `
+        -Description "WSL Linux bootstrap" `
+        -HeartbeatSeconds 20 `
+        -AllowFailure
+
+    if ($bootstrapExitCode -eq 0) {
+        Set-Checkpoint "phase:wsl-linux-bootstrap"
+        Write-Info "WSL Linux bootstrap finished."
+        return
+    }
+
+    Write-Info "WSL Linux bootstrap did not finish cleanly. Open WSL and run the Linux one-liner manually if needed."
+}
+
 function Invoke-RestartPrompt {
     Write-Step "Restart recommended"
     Write-Info "Restart Windows, then rerun the same bootstrap one-liner to continue."
@@ -823,6 +904,7 @@ if ($script:RestartRecommended) {
 }
 
 Refresh-Path
+Invoke-WslLinuxBootstrap
 
 Write-Step "Bootstrap complete"
 Set-Checkpoint "phase:bootstrap"
