@@ -55,6 +55,27 @@ function ConvertTo-ProcessArgumentList {
     return ($convertedArguments -join " ")
 }
 
+function Get-ProcessExitCode {
+    param([System.Diagnostics.Process]$Process)
+
+    try {
+        $Process.Refresh()
+        return $Process.ExitCode
+    } catch {
+        return $null
+    }
+}
+
+function Format-ExitCode {
+    param($ExitCode)
+
+    if ($null -eq $ExitCode) {
+        return "unavailable"
+    }
+
+    return [string]$ExitCode
+}
+
 function Invoke-ProcessWithHeartbeat {
     param(
         [string]$FilePath,
@@ -79,13 +100,18 @@ function Invoke-ProcessWithHeartbeat {
     }
 
     $process.WaitForExit()
-    Write-Info "$Description finished with exit code $($process.ExitCode)."
+    $exitCode = Get-ProcessExitCode $process
+    Write-Info "$Description finished with exit code $(Format-ExitCode $exitCode)."
 
-    if (($SuccessExitCodes -notcontains $process.ExitCode) -and (-not $AllowFailure)) {
-        throw "$Description failed with exit code $($process.ExitCode)."
+    if (($null -eq $exitCode) -and (-not $AllowFailure)) {
+        throw "$Description finished but did not expose an exit code."
     }
 
-    return $process.ExitCode
+    if (($null -ne $exitCode) -and ($SuccessExitCodes -notcontains $exitCode) -and (-not $AllowFailure)) {
+        throw "$Description failed with exit code $exitCode."
+    }
+
+    return $exitCode
 }
 
 function Test-Command {
@@ -466,18 +492,26 @@ function Install-GoogleChromeDirect {
         }
 
         if (Test-Command "curl.exe") {
-            Invoke-ProcessWithHeartbeat `
+            $downloadExitCode = Invoke-ProcessWithHeartbeat `
                 -FilePath "curl.exe" `
                 -Arguments @("-L", "--fail", "--retry", "3", "--connect-timeout", "20", "--output", $installerPath, $installerUrl) `
                 -Description "Google Chrome direct download" `
-                -HeartbeatSeconds 10 | Out-Null
+                -HeartbeatSeconds 10 `
+                -AllowFailure
+
+            if ($null -eq $downloadExitCode) {
+                Write-Info "Chrome download exit code was unavailable. Checking the downloaded file."
+            } elseif ($downloadExitCode -ne 0) {
+                Write-Info "Chrome download exited with $downloadExitCode. Checking whether the installer file is usable."
+            }
         } else {
             Write-Heartbeat "curl.exe was not found; using PowerShell download."
             Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing
         }
 
-        if (-not (Test-Path $installerPath)) {
-            Write-Info "Chrome direct installer was not downloaded."
+        $installerFile = Get-Item -Path $installerPath -ErrorAction SilentlyContinue
+        if (($null -eq $installerFile) -or ($installerFile.Length -lt 1048576)) {
+            Write-Info "Chrome direct installer was not downloaded completely."
             return $false
         }
 
@@ -596,9 +630,10 @@ function Install-WingetPackages {
 
             if ($process.HasExited) {
                 $process.WaitForExit()
-                Write-Info "$($record.Name) install finished with exit code $($process.ExitCode)."
+                $exitCode = Get-ProcessExitCode $process
+                Write-Info "$($record.Name) install finished with exit code $(Format-ExitCode $exitCode)."
 
-                if ($process.ExitCode -ne 0) {
+                if (($null -eq $exitCode) -or ($exitCode -ne 0)) {
                     Write-Info "$($record.Name) will be checked for fallback handling."
                     [void]$failedPackages.Add($record.Package)
                 } else {
@@ -647,6 +682,15 @@ function Get-WslDistros {
     )
 }
 
+function Complete-WslInstallRequest {
+    param([string]$Message)
+
+    $script:RestartRecommended = $true
+    Set-Checkpoint "phase:wsl-install-requested"
+    Write-Info $Message
+    Write-Info "Restart Windows, then rerun the same bootstrap one-liner to continue."
+}
+
 function Install-Wsl {
     if ($SkipWsl) {
         Write-Step "Skipping WSL"
@@ -682,6 +726,11 @@ function Install-Wsl {
         -HeartbeatSeconds 20 `
         -AllowFailure
 
+    if ($null -eq $installExitCode) {
+        Complete-WslInstallRequest "WSL install did not expose an exit code. Windows may have accepted the feature change and asked for a restart."
+        return
+    }
+
     if ($installExitCode -notin @(0, 3010)) {
         Write-Info "Retrying WSL install with web download."
         Write-Heartbeat "Downloading WSL package directly from Microsoft."
@@ -690,16 +739,20 @@ function Install-Wsl {
             -Arguments @("--install", "--web-download", "-d", $WslDistribution, "--no-launch") `
             -Description "WSL web-download install for $WslDistribution" `
             -SuccessExitCodes @(0, 3010) `
-            -HeartbeatSeconds 20
+            -HeartbeatSeconds 20 `
+            -AllowFailure
+    }
+
+    if ($null -eq $installExitCode) {
+        Complete-WslInstallRequest "WSL web-download install did not expose an exit code. Windows may have accepted the feature change and asked for a restart."
+        return
     }
 
     if ($installExitCode -notin @(0, 3010)) {
         throw "WSL installation failed."
     }
 
-    $script:RestartRecommended = $true
-    Set-Checkpoint "phase:wsl-install-requested"
-    Write-Info "WSL was installed. A Windows restart may be required before Linux setup can continue."
+    Complete-WslInstallRequest "WSL was installed. A Windows restart may be required before Linux setup can continue."
 }
 
 function Ensure-GhAuth {
